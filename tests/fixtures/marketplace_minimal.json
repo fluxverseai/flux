@@ -1,0 +1,44 @@
+{
+  "name": "flux-test-marketplace",
+  "owner": { "name": "test" },
+  "metadata": { "description": "Minimal test fixture", "version": "0.1.0" },
+  "mcp_definitions": {
+    "memory": {
+      "type": "npm-package",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "tags": ["memory", "official"]
+    },
+    "wikijs-mcp": {
+      "type": "git-submodule",
+      "source_dir": "marketplace/mcps/wikijs-mcp",
+      "command": "uv",
+      "args": ["run", "--directory", "{source_dir}", "wikijs-mcp-server"],
+      "tags": ["wiki", "knowledge"],
+      "auth": {
+        "type": "keychain",
+        "env_vars": ["WIKIJS_URL", "WIKIJS_API_KEY"],
+        "fix_description": "Run: flux secret set wikijs-mcp WIKIJS_URL <url>"
+      }
+    },
+    "github-mcp": {
+      "type": "npm-package",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "tags": ["github"],
+      "auth": {
+        "type": "github-cli",
+        "check_cmd": ["gh", "auth", "status"],
+        "fix_cmd": ["gh", "auth", "login"],
+        "fix_description": "Authenticate with GitHub CLI"
+      }
+    }
+  },
+  "skill_definitions": {
+    "claude-xlsx": {
+      "type": "git-submodule",
+      "source_dir": "marketplace/skills/xlsx",
+      "tags": ["excel", "official"]
+    }
+  }
+}

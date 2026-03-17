@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test/coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+.coverage
+
+# Flux runtime (generated)
+.mcp.json
+sandbox/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+.env
+*.age
+identity
