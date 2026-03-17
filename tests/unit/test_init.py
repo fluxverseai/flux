@@ -6,8 +6,8 @@ underlying library functions directly rather than spawning a subprocess.
 
 from __future__ import annotations
 
-from flux_cli.lib.projects import list_projects, register_project
-from lib.manifest import load_flux_json, save_flux_json
+from flux_cli.manifest import load_flux_json, save_flux_json
+from flux_cli.projects import list_projects, register_project
 
 
 class TestInitCreatesFluxJson:

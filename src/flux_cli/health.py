@@ -16,28 +16,15 @@ from typing import Any
 
 
 def probe_mcp_server(config: dict[str, Any]) -> tuple[str, str]:
-    """
-    Probe an MCP server via MCP initialize + tools/list handshake.
-    Returns (status, reason) where status is one of:
-      connected     — handshake + tools/list succeeded
-      running       — server started, tools/list had no response
-      auth_required — auth check failed or tools/list returned auth error
-      timeout       — server didn't respond in time
-      error         — server returned a JSON-RPC error
-      failed        — command not found or process crashed
+    """Probe an MCP server via MCP initialize + tools/list handshake.
+    Returns (status, reason).
     """
     result = probe_mcp_server_detailed(config)
     return result["status"], result["detail"]
 
 
 def probe_mcp_server_detailed(config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Extended probe returning a dict with keys:
-      status      — one of the six status categories
-      detail      — human-readable reason string
-      tools_count — number of tools reported (None if unknown)
-      server_info — server name/version string (None if unknown)
-    """
+    """Extended probe returning a dict with status, detail, tools_count, server_info."""
     command = config.get('command', '')
     args_list = config.get('args', [])
     env_overrides = config.get('env', {})
@@ -51,7 +38,6 @@ def probe_mcp_server_detailed(config: dict[str, Any]) -> dict[str, Any]:
         return {"status": "! needs authentication", "detail": command,
                 "tools_count": None, "server_info": None}
 
-    # Pre-flight auth check
     if auth.get('check_cmd'):
         try:
             result = subprocess.run(auth['check_cmd'], capture_output=True, timeout=5)  # noqa: S603
@@ -220,7 +206,6 @@ def check_build_artifacts(flux_root: Path, mcp_definitions: dict[str, Any]) -> l
         build_cmd = defn.get("build_cmd")
         source_dir = defn.get("source_dir")
         if build_cmd and source_dir:
-            # Heuristic: check for node_modules or dist or .venv
             src = flux_root / source_dir
             has_artifacts = (
                 (src / "node_modules").is_dir()
@@ -248,7 +233,6 @@ def check_secrets_consistency(
         env_vars = auth.get("env_vars", [])
         if not env_vars:
             continue
-        # secrets_index maps mcp_name -> list of stored var names
         stored = secrets_index.get(mcp_name, [])
         missing = [v for v in env_vars if v not in stored]
         if missing:
@@ -281,7 +265,6 @@ def run_doctor_checks(
     """Run all doctor checks and return a flat list of results."""
     results: list[CheckResult] = []
 
-    # Environment tools
     results.append(check_python_version())
     results.append(check_tool_installed("uv", fix_hint="curl -LsSf https://astral.sh/uv/install.sh | sh"))
     results.append(check_tool_installed("git", fix_hint="Install git: https://git-scm.com"))
@@ -289,23 +272,18 @@ def run_doctor_checks(
     results.append(check_tool_installed("npm", fix_hint="Install Node.js (npm is bundled)"))
     results.append(check_tool_installed("claude", fix_hint="Install Claude CLI: https://docs.anthropic.com/en/docs/claude-cli"))
 
-    # Directory structure
     results.extend(check_directory_structure(flux_root))
 
-    # Registry
     if registry_path is not None:
         results.append(check_registry_valid(registry_path))
 
-    # MCP sources and builds
     if mcp_definitions:
         results.extend(check_mcp_sources_present(flux_root, mcp_definitions))
         results.extend(check_build_artifacts(flux_root, mcp_definitions))
 
-    # Secrets consistency
     if mcp_definitions and secrets_index is not None:
         results.extend(check_secrets_consistency(secrets_index, mcp_definitions))
 
-    # flux in PATH
     results.append(check_flux_in_path())
 
     return results

@@ -1,10 +1,10 @@
-"""Unit tests for flux_cli.lib.projects — project tracking CRUD."""
+"""Unit tests for flux_cli.projects — project tracking CRUD."""
 
 from __future__ import annotations
 
 import json
 
-from flux_cli.lib.projects import (
+from flux_cli.projects import (
     detect_stale_projects,
     list_projects,
     register_project,

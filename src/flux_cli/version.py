@@ -22,16 +22,12 @@ def current_version() -> str:
 
 
 def check_pypi_version(*, timeout: float = 5.0) -> str | None:
-    """Query PyPI for the latest flux-cli version.
-
-    Returns the version string on success, or ``None`` if PyPI is unreachable.
-    """
+    """Query PyPI for the latest flux-cli version."""
     try:
         req = urllib.request.Request(PYPI_URL, headers={"Accept": "application/json"})  # noqa: S310
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             data = json.loads(resp.read().decode())
         ver = data["info"]["version"]
-        # Sanitize: reject anything that doesn't look like a version string
         if not isinstance(ver, str) or not _VERSION_RE.match(ver):
             return None
         return ver
@@ -40,10 +36,7 @@ def check_pypi_version(*, timeout: float = 5.0) -> str | None:
 
 
 def format_version_output(*, check: bool = False) -> str:
-    """Build the human-readable version string.
-
-    When *check* is ``True``, queries PyPI and appends update information.
-    """
+    """Build the human-readable version string."""
     local = current_version()
 
     if not check:
@@ -58,7 +51,6 @@ def format_version_output(*, check: bool = False) -> str:
         local_ver = Version(local)
         latest_ver = Version(latest)
     except InvalidVersion:
-        # Fall back to string comparison if parsing fails
         if latest != local:
             return f"Update available: v{local} → v{latest}. Run: uv tool upgrade flux-cli"
         return f"flux-cli v{local} (up to date)"

@@ -1,4 +1,4 @@
-"""Unit tests for flux_cli.lib.sync — sync engine, launcher generation, .mcp.json."""
+"""Unit tests for flux_cli.sync — sync engine, launcher generation, .mcp.json."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import platform
 import stat
 from unittest.mock import patch
 
-from flux_cli.lib.sync import (
+from flux_cli.sync import (
     _secret_lookup_command,
     generate_launcher,
     sync_project,
@@ -170,7 +170,7 @@ class TestSyncAllTrackedProjects:
 
 
 class TestLauncherMacosUsesSecurity:
-    @patch("flux_cli.lib.sync.platform.system", return_value="Darwin")
+    @patch("flux_cli.sync.platform.system", return_value="Darwin")
     def test_launcher_macos_uses_security(self, mock_sys, tmp_path):
         launcher_dir = tmp_path / "launchers"
         mcp_data = {
@@ -187,7 +187,7 @@ class TestLauncherMacosUsesSecurity:
 
 
 class TestLauncherLinuxUsesSecretTool:
-    @patch("flux_cli.lib.sync.platform.system", return_value="Linux")
+    @patch("flux_cli.sync.platform.system", return_value="Linux")
     def test_launcher_linux_uses_secret_tool(self, mock_sys, tmp_path):
         launcher_dir = tmp_path / "launchers"
         mcp_data = {
@@ -246,14 +246,14 @@ class TestLauncherScriptDirRelative:
 
 
 class TestSecretLookupCommand:
-    @patch("flux_cli.lib.sync.platform.system", return_value="Darwin")
+    @patch("flux_cli.sync.platform.system", return_value="Darwin")
     def test_macos_uses_security(self, _mock):
         cmd = _secret_lookup_command("my-mcp", "API_KEY")
         assert "security find-generic-password" in cmd
         assert "flux.my-mcp" in cmd
         assert "API_KEY" in cmd
 
-    @patch("flux_cli.lib.sync.platform.system", return_value="Linux")
+    @patch("flux_cli.sync.platform.system", return_value="Linux")
     def test_linux_uses_secret_tool(self, _mock):
         cmd = _secret_lookup_command("my-mcp", "API_KEY")
         assert "secret-tool lookup" in cmd

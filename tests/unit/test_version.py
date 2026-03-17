@@ -1,11 +1,11 @@
-"""Unit tests for flux_cli.lib.version — version display and PyPI update check."""
+"""Unit tests for flux_cli.version — version display and PyPI update check."""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
 
-from flux_cli.lib.version import (
+from flux_cli.version import (
     check_pypi_version,
     current_version,
     format_version_output,
@@ -31,16 +31,16 @@ class TestVersionCheckNewerAvailable:
         """--check shows upgrade instructions when a newer version exists on PyPI."""
         fake_response = MagicMock()
         fake_response.read.return_value = json.dumps(
-            {"info": {"version": "1.0.0"}}
+            {"info": {"version": "99.0.0"}}
         ).encode()
         fake_response.__enter__ = lambda s: s
         fake_response.__exit__ = MagicMock(return_value=False)
 
-        with patch("flux_cli.lib.version.urllib.request.urlopen", return_value=fake_response):
+        with patch("flux_cli.version.urllib.request.urlopen", return_value=fake_response):
             result = format_version_output(check=True)
 
         assert "Update available" in result
-        assert "v1.0.0" in result
+        assert "v99.0.0" in result
         assert "uv tool upgrade flux-cli" in result
 
 
@@ -55,7 +55,7 @@ class TestVersionCheckUpToDate:
         fake_response.__enter__ = lambda s: s
         fake_response.__exit__ = MagicMock(return_value=False)
 
-        with patch("flux_cli.lib.version.urllib.request.urlopen", return_value=fake_response):
+        with patch("flux_cli.version.urllib.request.urlopen", return_value=fake_response):
             result = format_version_output(check=True)
 
         assert "up to date" in result
@@ -68,7 +68,7 @@ class TestVersionCheckPypiUnreachable:
         import urllib.error
 
         with patch(
-            "flux_cli.lib.version.urllib.request.urlopen",
+            "flux_cli.version.urllib.request.urlopen",
             side_effect=urllib.error.URLError("Network unreachable"),
         ):
             result = format_version_output(check=True)
@@ -81,7 +81,7 @@ class TestVersionCheckPypiUnreachable:
         import urllib.error
 
         with patch(
-            "flux_cli.lib.version.urllib.request.urlopen",
+            "flux_cli.version.urllib.request.urlopen",
             side_effect=urllib.error.URLError("timeout"),
         ):
             assert check_pypi_version() is None

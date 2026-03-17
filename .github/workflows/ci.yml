@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Validate — JSON schemas, Python syntax
+  # Validate — Python syntax
   # ---------------------------------------------------------------------------
   validate:
     name: Validate
@@ -20,15 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check Python syntax (lib/)
+      - name: Check Python syntax (src/flux_cli/)
         run: |
-          for f in lib/*.py; do
-            python3 -m py_compile "$f"
-          done
-
-      - name: Check Python syntax (flux_cli/)
-        run: |
-          find flux_cli/ -name "*.py" -exec python3 -m py_compile {} \;
+          find src/flux_cli/ -name "*.py" -exec python3 -m py_compile {} \;
 
       - name: Check Python syntax (tests/)
         run: |
@@ -49,10 +43,10 @@ jobs:
           version: "latest"
 
       - name: Run ruff linter
-        run: uv run --with ruff ruff check lib/ tests/ flux_cli/ --output-format=github
+        run: uv run --with ruff ruff check src/flux_cli/ tests/ --output-format=github
 
       - name: Run ruff formatter check
-        run: uv run --with ruff ruff format --check lib/ tests/ flux_cli/
+        run: uv run --with ruff ruff format --check src/flux_cli/ tests/
         continue-on-error: true
 
   # ---------------------------------------------------------------------------
@@ -113,7 +107,6 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit/ \
-            --cov=lib \
             --cov=flux_cli \
             --cov-report=xml:coverage-unit.xml \
             --cov-report=term-missing \
@@ -163,7 +156,6 @@ jobs:
       - name: Run integration tests with coverage
         run: |
           uv run pytest tests/integration/ \
-            --cov=lib \
             --cov=flux_cli \
             --cov-report=xml:coverage-integration.xml \
             --cov-report=term-missing \

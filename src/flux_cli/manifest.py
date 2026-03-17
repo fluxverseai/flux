@@ -1,16 +1,13 @@
-"""manifest.py — Load and save the marketplace manifest, v1 registry, and per-project flux.json files."""
+"""manifest.py — Load and save the v1 registry and per-project flux.json files."""
 
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
-FLUX_ROOT = Path(__file__).resolve().parent.parent
-MARKETPLACE_DIR = FLUX_ROOT / "marketplace"
-MANIFEST_PATH = MARKETPLACE_DIR / "marketplace.json"
+from flux_cli.paths import registry_path
 
 REGISTRY_VERSION = "1.0.0"
 
@@ -32,12 +29,10 @@ def _empty_registry() -> dict[str, Any]:
 def load_registry(path: Path | None = None) -> dict[str, Any]:
     """Load the v1 registry from *path*.
 
-    If *path* is ``None``, import ``flux_cli.lib.paths.registry_path`` to get
-    the canonical location.  When the file does not exist an empty registry is
-    created on disk and returned.
+    If *path* is ``None``, uses the canonical registry_path() location.
+    When the file does not exist an empty registry is created on disk and returned.
     """
     if path is None:
-        from flux_cli.lib.paths import registry_path
         path = registry_path()
 
     if not path.exists():
@@ -56,30 +51,9 @@ def load_registry(path: Path | None = None) -> dict[str, Any]:
 def save_registry(data: dict[str, Any], path: Path | None = None) -> None:
     """Atomically write the v1 registry to *path*."""
     if path is None:
-        from flux_cli.lib.paths import registry_path
         path = registry_path()
 
     _atomic_json_write(path, data)
-
-
-# ---------------------------------------------------------------------------
-# Legacy marketplace manifest (marketplace/marketplace.json)
-# ---------------------------------------------------------------------------
-
-
-def load_manifest() -> dict[str, Any]:
-    """Load the marketplace manifest, exiting if the file is missing."""
-    if not MANIFEST_PATH.exists():
-        print(f"\u274c Error: Registry not found at {MANIFEST_PATH}")
-        sys.exit(1)
-    with open(MANIFEST_PATH) as f:
-        return json.load(f)
-
-
-def save_manifest(manifest: dict[str, Any]) -> None:
-    """Atomically write the marketplace manifest to disk."""
-    _atomic_json_write(MANIFEST_PATH, manifest)
-    print(f"\u2705 Updated {MANIFEST_PATH.name}")
 
 
 # ---------------------------------------------------------------------------

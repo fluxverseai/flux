@@ -1,10 +1,10 @@
-"""Unit tests for flux_cli.lib.setup — fresh install and migration."""
+"""Unit tests for flux_cli.setup_flux — fresh install and migration."""
 
 import json
 from pathlib import Path
 from unittest.mock import patch
 
-from flux_cli.lib.setup import (
+from flux_cli.setup_flux import (
     _convert_entry,
     _find_old_marketplace,
     check_dependencies,
@@ -170,7 +170,7 @@ class TestSetupDetectsDependencies:
         skill = _make_bundled_skill(tmp_path)
 
         # Make shutil.which return None for everything
-        with patch("flux_cli.lib.setup.shutil.which", return_value=None):
+        with patch("flux_cli.setup_flux.shutil.which", return_value=None):
             result = run_setup(
                 search_path=tmp_path / "nonexistent",
                 skill_target_dir=tmp_path / "claude_skills",
@@ -188,7 +188,7 @@ class TestSetupDetectsDependencies:
         monkeypatch.delenv("FLUX_HOME", raising=False)
         skill = _make_bundled_skill(tmp_path)
 
-        with patch("flux_cli.lib.setup.shutil.which", return_value="/usr/bin/fake"):
+        with patch("flux_cli.setup_flux.shutil.which", return_value="/usr/bin/fake"):
             result = run_setup(
                 search_path=tmp_path / "nonexistent",
                 skill_target_dir=tmp_path / "claude_skills",
@@ -419,7 +419,7 @@ class TestSkillBundledInPackage:
     """The skill file exists in the package data directory."""
 
     def test_skill_bundled_in_package(self):
-        from flux_cli.lib.setup import _BUNDLED_SKILL
+        from flux_cli.setup_flux import _BUNDLED_SKILL
 
         assert _BUNDLED_SKILL.exists(), f"Bundled skill not found at {_BUNDLED_SKILL}"
         content = _BUNDLED_SKILL.read_text()
@@ -479,13 +479,13 @@ class TestCheckDependencies:
     """check_dependencies reports missing tools."""
 
     def test_all_present(self):
-        with patch("flux_cli.lib.setup.shutil.which", return_value="/usr/bin/x"):
+        with patch("flux_cli.setup_flux.shutil.which", return_value="/usr/bin/x"):
             missing = check_dependencies()
         tools = {"uv", "git", "node", "claude"}
         assert tools.isdisjoint(set(missing))
 
     def test_all_missing(self):
-        with patch("flux_cli.lib.setup.shutil.which", return_value=None):
+        with patch("flux_cli.setup_flux.shutil.which", return_value=None):
             missing = check_dependencies()
         assert "uv" in missing
         assert "git" in missing

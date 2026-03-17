@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from flux_cli.lib.paths import config_path, flux_home
+from flux_cli.paths import config_path, flux_home
 
 # ---------------------------------------------------------------------------
 # Platform detection
@@ -88,18 +88,12 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
 
 
 def _to_toml(cfg: dict[str, Any], _prefix: str = "") -> str:
-    """Minimal TOML serializer for flat/one-level-nested dicts.
-
-    Handles the shapes we actually produce (string values, one level of
-    table nesting).  Not a general-purpose TOML writer.
-    """
+    """Minimal TOML serializer for flat/one-level-nested dicts."""
     lines: list[str] = []
-    # First, emit top-level scalar keys
     for key, value in cfg.items():
         if not isinstance(value, dict):
             lines.append(f"{key} = {_toml_value(value)}")
 
-    # Then, emit table sections
     for key, value in cfg.items():
         if isinstance(value, dict):
             section = f"{_prefix}{key}" if not _prefix else f"{_prefix}.{key}"
@@ -117,7 +111,6 @@ def _toml_value(v: Any) -> str:
     if isinstance(v, int):
         return str(v)
     if isinstance(v, str):
-        # Basic TOML string escaping
         escaped = v.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return f'"{v}"'

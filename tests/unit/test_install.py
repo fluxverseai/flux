@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 import shutil
 
-from flux_cli.lib.sync import sync_project
-from lib.manifest import load_flux_json, save_flux_json
+from flux_cli.manifest import load_flux_json, save_flux_json
+from flux_cli.sync import sync_project
 
 
 def _registry(mcps=None, skills=None):

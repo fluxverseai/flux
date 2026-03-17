@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
-from registry import (
+from flux_cli.registry import (
     best_package,
     display_name,
     get_server,

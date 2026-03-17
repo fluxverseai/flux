@@ -1,4 +1,4 @@
-"""Tests for flux_cli.lib.secrets — backend protocol, backends, index, and CLI integration."""
+"""Tests for flux_cli.secrets — backend protocol, backends, index, and CLI integration."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from flux_cli.lib.secrets import (
+from flux_cli.secrets import (
     AgeEncryptedBackend,
     LinuxSecretServiceBackend,
     MacOSKeychainBackend,
@@ -29,8 +29,8 @@ def secrets_home(monkeypatch, tmp_path):
     """Point flux_home() and secrets_path() at a temp directory."""
     fake_home = tmp_path / ".flux"
     fake_home.mkdir()
-    monkeypatch.setattr("flux_cli.lib.secrets.flux_home", lambda: fake_home)
-    monkeypatch.setattr("flux_cli.lib.secrets.secrets_path", lambda: fake_home / "secrets.json")
+    monkeypatch.setattr("flux_cli.secrets.flux_home", lambda: fake_home)
+    monkeypatch.setattr("flux_cli.secrets.secrets_path", lambda: fake_home / "secrets.json")
     return fake_home
 
 
@@ -86,10 +86,10 @@ class TestGetBackend:
     def test_get_backend_default_from_config(self, monkeypatch):
         """When no config passed, get_backend loads config automatically."""
         monkeypatch.setattr(
-            "flux_cli.lib.secrets.get_backend.__module__",  # dummy; we patch load_config
-            "flux_cli.lib.secrets",
+            "flux_cli.secrets.get_backend.__module__",  # dummy; we patch load_config
+            "flux_cli.secrets",
         )
-        with patch("flux_cli.lib.config.load_config", return_value={"secrets": {"backend": "keychain"}}):
+        with patch("flux_cli.config.load_config", return_value={"secrets": {"backend": "keychain"}}):
             backend = get_backend()
             assert isinstance(backend, MacOSKeychainBackend)
 
@@ -100,7 +100,7 @@ class TestGetBackend:
 
 class TestKeychainSet:
     def test_keychain_set(self, secrets_home, mocker):
-        mock_run = mocker.patch("flux_cli.lib.secrets.subprocess.run")
+        mock_run = mocker.patch("flux_cli.secrets.subprocess.run")
         mock_run.return_value = MagicMock(returncode=0, stderr=b"")
         backend = MacOSKeychainBackend()
         backend.set("mymcp", "MY_KEY", "myvalue")
@@ -113,7 +113,7 @@ class TestKeychainSet:
         assert mock_run.call_args[1].get("input") == b"myvalue"
 
     def test_keychain_set_updates_index(self, secrets_home, mocker):
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=0, stderr=b""))
         backend = MacOSKeychainBackend()
         backend.set("mymcp", "MY_KEY", "val")
@@ -121,7 +121,7 @@ class TestKeychainSet:
         assert "MY_KEY" in idx["mymcp"]
 
     def test_keychain_set_exits_on_failure(self, secrets_home, mocker):
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=1, stderr=b"error"))
         backend = MacOSKeychainBackend()
         with pytest.raises(SystemExit):
@@ -130,13 +130,13 @@ class TestKeychainSet:
 
 class TestKeychainGet:
     def test_keychain_get(self, mocker):
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=0, stdout="secret\n"))
         backend = MacOSKeychainBackend()
         assert backend.get("mymcp", "MY_KEY") == "secret"
 
     def test_keychain_not_found(self, mocker):
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=44, stdout=""))
         backend = MacOSKeychainBackend()
         assert backend.get("mymcp", "MY_KEY") is None
@@ -144,7 +144,7 @@ class TestKeychainGet:
 
 class TestKeychainDelete:
     def test_keychain_delete(self, secrets_home, mocker):
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=0))
         save_secrets_index({"mymcp": ["K1", "K2"]})
         backend = MacOSKeychainBackend()
@@ -272,7 +272,7 @@ class TestAgeSet:
         identity.write_text("# public key: age1abc\nAGE-SECRET-KEY-1XYZ\n")
         identity.chmod(0o600)
 
-        mocker.patch("flux_cli.lib.secrets.subprocess.run", side_effect=[
+        mocker.patch("flux_cli.secrets.subprocess.run", side_effect=[
             # _load_store (decrypt) — no existing file, won't be called
             # _save_store (encrypt)
             MagicMock(returncode=0, stdout="", stderr=""),
@@ -292,7 +292,7 @@ class TestAgeGet:
         (secrets_home / "secrets.age").write_text("encrypted")
 
         store = {"mymcp": {"KEY": "secret_value"}}
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=0, stdout=json.dumps(store), stderr=""))
         backend = AgeEncryptedBackend()
         assert backend.get("mymcp", "KEY") == "secret_value"
@@ -308,7 +308,7 @@ class TestAgeGet:
         identity.write_text("# public key: age1abc\nAGE-SECRET-KEY-1XYZ\n")
         identity.chmod(0o600)
         (secrets_home / "secrets.age").write_text("corrupted")
-        mocker.patch("flux_cli.lib.secrets.subprocess.run",
+        mocker.patch("flux_cli.secrets.subprocess.run",
                       return_value=MagicMock(returncode=1, stdout="", stderr="bad key"))
         backend = AgeEncryptedBackend()
         with pytest.raises(RuntimeError, match="Failed to decrypt"):
@@ -323,7 +323,7 @@ class TestAgeDelete:
         (secrets_home / "secrets.age").write_text("encrypted")
 
         store = {"mymcp": {"KEY": "val", "OTHER": "val2"}}
-        mock_run = mocker.patch("flux_cli.lib.secrets.subprocess.run")
+        mock_run = mocker.patch("flux_cli.secrets.subprocess.run")
         # First call: decrypt (for _load_store)
         # Second call: encrypt to temp file (for _save_store)
         mock_run.side_effect = [
@@ -342,7 +342,7 @@ class TestAgeDelete:
 class TestAgeFirstUseCreatesIdentity:
     def test_age_first_use_creates_identity(self, secrets_home, mocker):
         keygen_output = "# created: 2026-01-01\n# public key: age1testpub\nAGE-SECRET-KEY-1TESTKEY\n"
-        mock_run = mocker.patch("flux_cli.lib.secrets.subprocess.run")
+        mock_run = mocker.patch("flux_cli.secrets.subprocess.run")
         mock_run.side_effect = [
             # age-keygen call
             MagicMock(returncode=0, stdout=keygen_output, stderr=""),
@@ -361,7 +361,7 @@ class TestAgeFirstUseCreatesIdentity:
 class TestAgeIdentityPermissions:
     def test_age_identity_permissions(self, secrets_home, mocker):
         keygen_output = "# public key: age1testpub\nAGE-SECRET-KEY-1TESTKEY\n"
-        mock_run = mocker.patch("flux_cli.lib.secrets.subprocess.run")
+        mock_run = mocker.patch("flux_cli.secrets.subprocess.run")
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=keygen_output, stderr=""),
             MagicMock(returncode=0, stdout="", stderr=""),
@@ -442,8 +442,8 @@ class TestSecretsIndexAtomicWrite:
     def test_secrets_index_atomic_write_creates_parent(self, monkeypatch, tmp_path):
         """Parent directory is created if missing."""
         new_home = tmp_path / "new" / ".flux"
-        monkeypatch.setattr("flux_cli.lib.secrets.flux_home", lambda: new_home)
-        monkeypatch.setattr("flux_cli.lib.secrets.secrets_path", lambda: new_home / "secrets.json")
+        monkeypatch.setattr("flux_cli.secrets.flux_home", lambda: new_home)
+        monkeypatch.setattr("flux_cli.secrets.secrets_path", lambda: new_home / "secrets.json")
         save_secrets_index({"x": ["Y"]})
         assert (new_home / "secrets.json").exists()
 
@@ -456,7 +456,7 @@ class TestCLISecretSet:
     def test_cli_secret_set(self, secrets_home, mocker):
         """Verify the backend set method is callable with expected args."""
         mock_backend = MagicMock(spec=MacOSKeychainBackend)
-        mocker.patch("flux_cli.lib.secrets.get_backend", return_value=mock_backend)
+        mocker.patch("flux_cli.secrets.get_backend", return_value=mock_backend)
 
         # Test via the backend interface directly.
         mock_backend.set("mymcp", "MY_KEY", "myval")
@@ -467,7 +467,7 @@ class TestCLISecretGet:
     def test_cli_secret_get(self, mocker):
         mock_backend = MagicMock()
         mock_backend.get.return_value = "secret_value"
-        mocker.patch("flux_cli.lib.secrets.get_backend", return_value=mock_backend)
+        mocker.patch("flux_cli.secrets.get_backend", return_value=mock_backend)
         result = mock_backend.get("mymcp", "MY_KEY")
         assert result == "secret_value"
 
@@ -475,7 +475,7 @@ class TestCLISecretGet:
 class TestCLISecretDelete:
     def test_cli_secret_delete(self, mocker):
         mock_backend = MagicMock()
-        mocker.patch("flux_cli.lib.secrets.get_backend", return_value=mock_backend)
+        mocker.patch("flux_cli.secrets.get_backend", return_value=mock_backend)
         mock_backend.delete("mymcp", "MY_KEY")
         mock_backend.delete.assert_called_once_with("mymcp", "MY_KEY")
 

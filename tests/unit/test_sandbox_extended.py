@@ -1,4 +1,4 @@
-"""Unit tests for flux_cli.lib.sandbox — extended sandbox lifecycle.
+"""Unit tests for flux_cli.sandbox — extended sandbox lifecycle.
 
 Covers: sandbox creation, scoped mcp.json, run-meta, agent execution,
 run listing, run cleanup, and manifest loading.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flux_cli.lib.sandbox import (
+from flux_cli.sandbox import (
     clean_runs,
     create_sandbox,
     generate_run_id,
@@ -31,7 +31,7 @@ from flux_cli.lib.sandbox import (
 @pytest.fixture()
 def sandbox_home(tmp_path, monkeypatch):
     """Point flux_home / sandbox_dir to a temp directory."""
-    monkeypatch.setattr("flux_cli.lib.paths._resolve_flux_home", lambda: tmp_path)
+    monkeypatch.setattr("flux_cli.paths._resolve_flux_home", lambda: tmp_path)
     (tmp_path / "sandbox").mkdir(exist_ok=True)
     return tmp_path
 
@@ -142,11 +142,11 @@ class TestRunInvokesClaude:
         )
         write_run_meta(path, "20260316-abcd", "test task", ["memory"])
 
-        mocker.patch("flux_cli.lib.sandbox.shutil.which", return_value="/usr/local/bin/claude")
+        mocker.patch("flux_cli.sandbox.shutil.which", return_value="/usr/local/bin/claude")
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         mock_proc.communicate.return_value = ("", "")
-        mock_popen = mocker.patch("flux_cli.lib.sandbox.subprocess.Popen", return_value=mock_proc)
+        mock_popen = mocker.patch("flux_cli.sandbox.subprocess.Popen", return_value=mock_proc)
 
         exit_code = run_agent(path, "test task")
 
@@ -166,8 +166,8 @@ def _mock_popen(mocker, returncode=0):
     mock_proc.returncode = returncode
     mock_proc.communicate.return_value = ("", "")
     mock_proc.pid = 12345
-    mocker.patch("flux_cli.lib.sandbox.shutil.which", return_value="/usr/local/bin/claude")
-    mocker.patch("flux_cli.lib.sandbox.subprocess.Popen", return_value=mock_proc)
+    mocker.patch("flux_cli.sandbox.shutil.which", return_value="/usr/local/bin/claude")
+    mocker.patch("flux_cli.sandbox.subprocess.Popen", return_value=mock_proc)
     return mock_proc
 
 
@@ -235,8 +235,8 @@ class TestRunTimeoutKillsProcess:
         mock_proc.pid = 12345
         mock_proc.communicate.side_effect = sp.TimeoutExpired(cmd=["claude"], timeout=5)
         mock_proc.wait.return_value = None
-        mocker.patch("flux_cli.lib.sandbox.shutil.which", return_value="/usr/local/bin/claude")
-        mocker.patch("flux_cli.lib.sandbox.subprocess.Popen", return_value=mock_proc)
+        mocker.patch("flux_cli.sandbox.shutil.which", return_value="/usr/local/bin/claude")
+        mocker.patch("flux_cli.sandbox.subprocess.Popen", return_value=mock_proc)
         mocker.patch("os.getpgid", return_value=12345)
         mocker.patch("os.killpg")
 
@@ -299,7 +299,7 @@ class TestRunListEmpty:
 
     def test_run_list_empty_no_sandbox_dir(self, tmp_path, monkeypatch):
         """list_runs returns empty when sandbox dir doesn't exist."""
-        monkeypatch.setattr("flux_cli.lib.paths._resolve_flux_home", lambda: tmp_path / "nonexistent")
+        monkeypatch.setattr("flux_cli.paths._resolve_flux_home", lambda: tmp_path / "nonexistent")
         runs = list_runs()
         assert runs == []
 

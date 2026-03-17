@@ -1,12 +1,4 @@
-"""Extended sandbox lifecycle — creation, agent execution, listing, and cleanup.
-
-Builds on ``lib/sandbox.py`` (run-id generation, meta helpers) and adds:
-- Pre-flight validation via ``flux_cli.lib.preflight``
-- Scoped ``.mcp.json`` generation via ``flux_cli.lib.sync``
-- Agent invocation (``claude --print``) with timeout support
-- ``flux run list`` and ``flux run clean`` with keep-recent logic
-- Manifest-file loading for ``flux run --file``
-"""
+"""Extended sandbox lifecycle — creation, agent execution, listing, and cleanup."""
 
 from __future__ import annotations
 
@@ -19,9 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from flux_cli.lib.paths import sandbox_dir
-from flux_cli.lib.preflight import run_preflight
-from flux_cli.lib.sync import _build_server_entry, _load_registry_for_sync
+from flux_cli.paths import sandbox_dir
+from flux_cli.preflight import run_preflight
+from flux_cli.sync import _build_server_entry, _load_registry_for_sync
 
 # ---------------------------------------------------------------------------
 # Run ID
@@ -36,7 +28,7 @@ def _token_hex(n: int) -> str:
 def generate_run_id() -> str:
     """Generate a run ID: YYYYMMDD-XXXX (e.g. 20260315-a3f2)."""
     date_part = datetime.now().strftime("%Y%m%d")
-    hex_part = _token_hex(2)  # 4 hex chars
+    hex_part = _token_hex(2)
     return f"{date_part}-{hex_part}"
 
 
@@ -53,28 +45,12 @@ def create_sandbox(
     *,
     skip_preflight: bool = False,
 ) -> Path:
-    """Create ``~/.flux/sandbox/<run-id>/`` with scoped .mcp.json and workspace.
-
-    Layout::
-
-        sandbox/<run-id>/
-            .mcp.json      -- scoped to this run's MCPs only
-            workspace/     -- scratch dir (cwd for claude)
-            run-meta.json  -- written later by write_run_meta()
-
-    Returns the sandbox path.
-
-    Raises
-    ------
-    PreflightError
-        If any pre-flight check fails (unless *skip_preflight* is True).
-    """
+    """Create ``~/.flux/sandbox/<run-id>/`` with scoped .mcp.json and workspace."""
     skills = skills or []
 
     if registry is None:
         registry = _load_registry_for_sync()
 
-    # Pre-flight validation
     if not skip_preflight:
         result = run_preflight(mcps, skills, registry=registry)
         if not result.ok:
@@ -82,7 +58,6 @@ def create_sandbox(
             raise PreflightError(msg, errors=result.errors)
 
     base = sandbox_dir()
-    # Validate run_id to prevent path traversal
     if "/" in run_id or "\\" in run_id or run_id.startswith("."):
         msg = f"Invalid run_id: {run_id!r}"
         raise ValueError(msg)
@@ -92,7 +67,6 @@ def create_sandbox(
     sandbox_path.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(exist_ok=True)
 
-    # Build scoped .mcp.json using sync engine's _build_server_entry
     mcp_defs = registry.get("mcp_definitions", {})
     mcp_servers: dict[str, Any] = {}
     for mcp_name in mcps:
@@ -188,13 +162,7 @@ def run_agent(
     timeout: int | None = None,
     run_id: str | None = None,
 ) -> int:
-    """Invoke ``claude --print <task> --mcp-config <path>`` as a subprocess.
-
-    Captures exit code, updates run-meta.json with status and timing.
-    If *timeout* is set, kills the process after that many seconds.
-
-    Returns the process exit code.
-    """
+    """Invoke ``claude --print <task> --mcp-config <path>`` as a subprocess."""
     mcp_config_path = sandbox_path / ".mcp.json"
     workspace = sandbox_path / "workspace"
     run_id = run_id or sandbox_path.name
@@ -212,7 +180,6 @@ def run_agent(
 
     start = time.monotonic()
     try:
-        # Use Popen with start_new_session so we can kill the entire process group on timeout
         proc = subprocess.Popen(  # noqa: S603
             cmd,
             stdout=subprocess.PIPE,
@@ -225,8 +192,6 @@ def run_agent(
             proc.communicate(timeout=timeout)
             exit_code = proc.returncode
         except subprocess.TimeoutExpired:
-            # Kill entire process group (claude + any child MCP servers)
-            import os
             import signal
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -234,7 +199,7 @@ def run_agent(
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 proc.wait()
-            exit_code = 124  # standard timeout exit code
+            exit_code = 124
     except OSError:
         exit_code = 1
     elapsed = time.monotonic() - start
@@ -275,7 +240,6 @@ def list_runs() -> list[dict[str, Any]]:
             except (json.JSONDecodeError, OSError):
                 continue
 
-    # Sort newest first
     runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
     return runs
 
@@ -288,13 +252,7 @@ _DEFAULT_KEEP = 5
 
 
 def clean_runs(*, force: bool = False, keep: int = _DEFAULT_KEEP) -> int:
-    """Remove completed sandboxes.
-
-    - Default: remove completed/failed runs, keeping the *keep* most recent.
-    - ``--force``: remove ALL runs regardless of status.
-
-    Returns the number of directories removed.
-    """
+    """Remove completed sandboxes."""
     base = sandbox_dir()
     if not base.exists():
         return 0
@@ -313,7 +271,6 @@ def clean_runs(*, force: bool = False, keep: int = _DEFAULT_KEEP) -> int:
             count += 1
         return count
 
-    # Partition: completed vs running
     completed: list[Path] = []
     for d in dirs:
         meta_path = d / "run-meta.json"
@@ -327,7 +284,6 @@ def clean_runs(*, force: bool = False, keep: int = _DEFAULT_KEEP) -> int:
         if status in ("done", "failed", "timeout", "unknown"):
             completed.append(d)
 
-    # Keep the most recent `keep` completed runs
     to_remove = completed[: max(0, len(completed) - keep)]
     for d in to_remove:
         shutil.rmtree(d)
@@ -340,12 +296,7 @@ def clean_runs(*, force: bool = False, keep: int = _DEFAULT_KEEP) -> int:
 
 
 def load_run_manifest(file_path: str | Path) -> dict[str, Any]:
-    """Load and validate a run manifest JSON file.
-
-    Required fields: ``task``.
-
-    Raises ValueError for invalid manifests.
-    """
+    """Load and validate a run manifest JSON file."""
     path = Path(file_path)
     if not path.exists():
         msg = f"Manifest file not found: {file_path}"

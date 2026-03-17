@@ -80,9 +80,11 @@ class TestFluxRunClean:
         assert result.returncode == 0
         assert "empty" in result.stdout.lower()
 
-    def test_preserves_claude_dir(self, flux_env):
+    def test_force_removes_all(self, flux_env):
         env, root = flux_env
-        (root / "sandbox" / ".claude").mkdir()
         (root / "sandbox" / "sandbox1").mkdir()
-        run_flux("run", "clean", "--force", env=env)
-        assert (root / "sandbox" / ".claude").exists()
+        (root / "sandbox" / "sandbox2").mkdir()
+        result = run_flux("run", "clean", "--force", env=env)
+        assert result.returncode == 0
+        dirs = list((root / "sandbox").iterdir())
+        assert len(dirs) == 0

@@ -1,7 +1,7 @@
-"""Unit tests for flux_cli.lib.validation"""
+"""Unit tests for flux_cli.validation"""
 
 
-from flux_cli.lib.validation import validate_flux_json, validate_name, validate_registry
+from flux_cli.validation import validate_flux_json, validate_name, validate_registry
 
 # ---------------------------------------------------------------------------
 # Name validation

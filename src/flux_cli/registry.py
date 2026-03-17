@@ -1,11 +1,4 @@
-"""
-registry.py — Query the official MCP Registry at registry.modelcontextprotocol.io
-
-Registry API notes:
-- Each item in the "servers" list wraps the actual data under a "server" key
-- The "q" param filters by name prefix, not full-text keyword
-- Packages (npm/pypi) are not always present; many servers use hosted "remotes" instead
-"""
+"""registry.py — Query the official MCP Registry at registry.modelcontextprotocol.io"""
 
 from __future__ import annotations
 
@@ -28,14 +21,13 @@ def search_servers(query: str | None = None, limit: int = 20) -> list[dict[str, 
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read().decode())
-            # Each item is {"server": {...}, "_meta": {...}} — unwrap the inner "server"
             return [item["server"] for item in data.get("servers", []) if "server" in item]
     except urllib.error.URLError as e:
         raise RuntimeError(f"Registry unavailable: {e}") from e
 
 
 def get_server(server_id: str) -> dict[str, Any]:
-    """Fetch full details for a specific server by ID. Returns unwrapped server dict."""
+    """Fetch full details for a specific server by ID."""
     url = f"{REGISTRY_BASE}/servers/{urllib.parse.quote(server_id, safe='')}"
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "flux-cli/1.0"})  # noqa: S310
     try:
@@ -59,17 +51,12 @@ def github_slug(server: dict[str, Any]) -> str | None:
         if len(parts) == 2:
             slug = parts[1].rstrip(".git")
             if slug.count("/") >= 1:
-                # Strip any subfolder beyond owner/repo
                 return "/".join(slug.split("/")[:2])
     return None
 
 
 def best_package(server: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Return (registry_name, package_name) for the most useful package, or (None, None).
-
-    The registry schema stores installable packages in server["packages"] (if present).
-    Many servers in the current registry are hosted-only (remotes) with no packages.
-    """
+    """Return (registry_name, package_name) for the most useful package, or (None, None)."""
     packages = server.get("packages") or []
     for preferred in ("npm", "pypi"):
         for pkg in packages:

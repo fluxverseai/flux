@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flux_cli.lib.paths import projects_path
+from flux_cli.paths import projects_path
 
 
 def _load_projects_file(path: Path | None = None) -> dict[str, Any]:
@@ -44,7 +44,6 @@ def register_project(project_path: Path, name: str, *, projects_file: Path | Non
     data = _load_projects_file(projects_file)
     abs_path = str(project_path.resolve())
 
-    # Skip if already registered
     for entry in data["projects"]:
         if entry["path"] == abs_path:
             return
