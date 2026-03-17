@@ -12,6 +12,23 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Validate — Python syntax
+  # ---------------------------------------------------------------------------
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Python syntax (src/flux_cli/)
+        run: |
+          find src/flux_cli/ -name "*.py" -exec python3 -m py_compile {} \;
+
+      - name: Check Python syntax (tests/)
+        run: |
+          find tests/ -name "*.py" -exec python3 -m py_compile {} \;
+
+  # ---------------------------------------------------------------------------
   # Lint — ruff
   # ---------------------------------------------------------------------------
   lint:
@@ -67,7 +84,7 @@ jobs:
   unit-tests:
     name: "Unit Tests (py${{ matrix.python-version }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    needs: [lint]
+    needs: [validate, lint]
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +128,7 @@ jobs:
   integration-tests:
     name: "Integration Tests (py${{ matrix.python-version }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    needs: [lint]
+    needs: [validate, lint]
     strategy:
       fail-fast: false
       matrix:
