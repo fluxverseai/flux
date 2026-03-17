@@ -69,15 +69,6 @@ def patch_manifest_paths(monkeypatch, flux_root):
     monkeypatch.setattr(m, "REGISTRY_VERSION", "1.0.0")
 
 
-@pytest.fixture
-def patch_mcp_config_paths(monkeypatch, flux_root):
-    """Redirect mcp_config module constants to the temp flux_root."""
-    import flux_cli.mcp_config as mc
-    monkeypatch.setattr(mc, "FLUX_ROOT", flux_root)
-    monkeypatch.setattr(mc, "MARKETPLACE_DIR", flux_root / "marketplace")
-    monkeypatch.setattr(mc, "MCP_DIR", flux_root / "marketplace" / "mcps")
-    monkeypatch.setattr(mc, "LAUNCHERS_DIR", flux_root / "marketplace" / "mcps" / "launchers")
-
 
 @pytest.fixture
 def patch_sandbox_paths(monkeypatch, flux_root):
