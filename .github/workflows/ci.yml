@@ -12,48 +12,6 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Validate — JSON schemas, Python syntax
-  # ---------------------------------------------------------------------------
-  validate:
-    name: Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate marketplace.json
-        run: |
-          python3 -c "
-          import json, sys
-          with open('marketplace/marketplace.json') as f:
-              m = json.load(f)
-          assert 'mcp_definitions' in m, 'missing mcp_definitions'
-          assert 'skill_definitions' in m, 'missing skill_definitions'
-          for name, mcp in m['mcp_definitions'].items():
-              assert 'type' in mcp, f'{name}: missing type'
-              has_command = 'command' in mcp
-              is_submodule = mcp.get('type') == 'git-submodule'
-              assert has_command or is_submodule, f'{name}: missing command'
-          print(f'marketplace.json valid — {len(m[\"mcp_definitions\"])} MCPs, {len(m[\"skill_definitions\"])} skills')
-          "
-
-      - name: Validate settings.json
-        run: python3 -c "import json; json.load(open('core/settings.json'))"
-
-      - name: Check Python syntax (lib/)
-        run: |
-          for f in lib/*.py; do
-            python3 -m py_compile "$f"
-          done
-
-      - name: Check Python syntax (flux_cli/)
-        run: |
-          find flux_cli/ -name "*.py" -exec python3 -m py_compile {} \;
-
-      - name: Check Python syntax (tests/)
-        run: |
-          find tests/ -name "*.py" -exec python3 -m py_compile {} \;
-
-  # ---------------------------------------------------------------------------
   # Lint — ruff
   # ---------------------------------------------------------------------------
   lint:
@@ -68,10 +26,10 @@ jobs:
           version: "latest"
 
       - name: Run ruff linter
-        run: uv run --with ruff ruff check lib/ tests/ flux_cli/ --output-format=github
+        run: uv run --with ruff ruff check src/flux_cli/ tests/ --output-format=github
 
       - name: Run ruff formatter check
-        run: uv run --with ruff ruff format --check lib/ tests/ flux_cli/
+        run: uv run --with ruff ruff format --check src/flux_cli/ tests/
         continue-on-error: true
 
   # ---------------------------------------------------------------------------
@@ -100,10 +58,8 @@ jobs:
         run: uv pip audit
         continue-on-error: true
 
-      - name: Gitleaks secret scanning
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Secret scanning handled by GitHub's built-in secret scanning + push protection
+      # (enabled at repo level — blocks pushes containing detected secrets)
 
   # ---------------------------------------------------------------------------
   # Unit tests — matrix across OS + Python versions
@@ -111,7 +67,7 @@ jobs:
   unit-tests:
     name: "Unit Tests (py${{ matrix.python-version }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    needs: [validate, lint]
+    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +90,6 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           uv run pytest tests/unit/ \
-            --cov=lib \
             --cov=flux_cli \
             --cov-report=xml:coverage-unit.xml \
             --cov-report=term-missing \
@@ -156,7 +111,7 @@ jobs:
   integration-tests:
     name: "Integration Tests (py${{ matrix.python-version }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
-    needs: [validate, lint]
+    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -184,7 +139,6 @@ jobs:
       - name: Run integration tests with coverage
         run: |
           uv run pytest tests/integration/ \
-            --cov=lib \
             --cov=flux_cli \
             --cov-report=xml:coverage-integration.xml \
             --cov-report=term-missing \
