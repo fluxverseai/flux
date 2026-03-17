@@ -1,0 +1,68 @@
+[project]
+name = "flux-cli"
+version = "0.1.0"
+description = "A personal control plane for AI agent tooling"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Kaushal Paneri"}]
+keywords = ["mcp", "ai", "agents", "claude", "tooling"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "rich",
+    "packaging",
+]
+
+[project.scripts]
+flux = "flux_cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.14",
+    "pytest-subtests>=0.11",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: real subprocess calls (skipped in fast CI lane)",
+    "integration: integration tests that invoke the CLI",
+    "unit: pure unit tests",
+    "macos: requires macOS security framework",
+]
+
+[tool.coverage.run]
+source = ["lib", "flux_cli"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S108"]  # assert and /tmp paths are expected in tests
+"tests/**/conftest.py" = ["S101", "S603"]  # subprocess in test helpers

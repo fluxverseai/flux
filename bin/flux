@@ -1,0 +1,1684 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = [
+#   "rich",
+# ]
+# ///
+"""Flux CLI — personal control plane for AI agent tooling.
+
+This is the main entry point invoked as ``bin/flux``.  It wires together
+the library modules under ``lib/`` and exposes every user-facing command
+(search, add, sync, run, doctor, etc.) via argparse subcommands.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+import shutil
+import argparse
+import subprocess
+from pathlib import Path
+
+# --- CORE PATHS ---
+BIN_DIR = Path(__file__).resolve().parent
+_REAL_FLUX_ROOT = BIN_DIR.parent
+# FLUX_TEST_ROOT lets integration tests redirect all data paths to a temp tree
+FLUX_ROOT = Path(os.environ["FLUX_TEST_ROOT"]) if os.environ.get("FLUX_TEST_ROOT") else _REAL_FLUX_ROOT
+MARKETPLACE_DIR = FLUX_ROOT / "marketplace"
+MCP_DIR = MARKETPLACE_DIR / "mcps"
+SKILLS_DIR = MARKETPLACE_DIR / "skills"
+SRC_DIR = FLUX_ROOT / "src"
+LAUNCHERS_DIR = MCP_DIR / "launchers"
+SANDBOX_DIR = FLUX_ROOT / "sandbox"
+
+# --- LIB IMPORTS ---
+sys.path.insert(0, str(_REAL_FLUX_ROOT / "lib"))  # always load lib from the real location
+# Add flux_cli package to path so that flux_cli.lib imports work
+sys.path.insert(0, str(_REAL_FLUX_ROOT))
+from manifest import load_manifest, save_manifest, load_flux_json, save_flux_json, load_registry, save_registry
+from registry import search_servers, get_server, display_name, github_slug, best_package, remote_url, suggest_flux_add
+from secrets import (
+    keychain_set, keychain_get, keychain_delete, get_keychain_env,
+    _load_secrets_index,
+)
+
+# New backend system (flux_cli.lib.secrets)
+sys.path.insert(0, str(_REAL_FLUX_ROOT))
+from flux_cli.lib.secrets import get_backend, load_secrets_index
+from mcp_config import generate_launcher, build_mcp_server_config, enrich_with_marketplace
+from health import probe_mcp_server, probe_mcp_server_detailed, run_doctor_checks, CheckResult
+from flux_cli.lib.validation import validate_name
+from flux_cli.lib.paths import registry_path, mcps_dir as v1_mcps_dir, skills_dir as v1_skills_dir
+
+# Patch lib module constants when running under FLUX_TEST_ROOT
+if os.environ.get("FLUX_TEST_ROOT"):
+    import manifest as _m, mcp_config as _mc, sandbox as _sb
+    _tr = FLUX_ROOT
+    _m.FLUX_ROOT = _tr
+    _m.MARKETPLACE_DIR = _tr / "marketplace"
+    _m.MANIFEST_PATH = _tr / "marketplace" / "marketplace.json"
+    _mc.FLUX_ROOT = _tr
+    _mc.MARKETPLACE_DIR = _tr / "marketplace"
+    _mc.MCP_DIR = _tr / "marketplace" / "mcps"
+    _mc.LAUNCHERS_DIR = _tr / "marketplace" / "mcps" / "launchers"
+    _sb.FLUX_ROOT = _tr
+    _sb.SANDBOX_DIR = _tr / "sandbox"
+
+
+# --- COMMANDS ---
+
+
+def cmd_search(args: argparse.Namespace) -> None:
+    """flux search <query> — discover MCP servers from the official registry."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+
+    console = Console()
+    query = args.query
+
+    console.print(f"\n[bold]Searching MCP Registry[/bold] for [cyan]{query!r}[/cyan]...\n")
+
+    try:
+        servers = search_servers(query=query, limit=args.limit)
+    except RuntimeError as e:
+        console.print(f"[red]❌ {e}[/red]")
+        sys.exit(1)
+
+    if not servers:
+        console.print("[yellow]No results found.[/yellow]")
+        sys.exit(0)
+
+    table = Table(box=box.SIMPLE_HEAVY, show_lines=False, expand=True)
+    table.add_column("#",          style="dim",    width=3,  no_wrap=True)
+    table.add_column("Name",       style="bold cyan", min_width=18, no_wrap=True)
+    table.add_column("Description", max_width=55, no_wrap=True)
+    table.add_column("Package",    style="dim",  max_width=35, no_wrap=True)
+    table.add_column("GitHub",     style="blue", max_width=35, no_wrap=True)
+
+    for i, srv in enumerate(servers, 1):
+        name = display_name(srv)
+        desc = (srv.get("description") or "").strip()
+        if len(desc) > 55:
+            desc = desc[:52] + "..."
+        reg, pkg = best_package(srv)
+        if pkg:
+            pkg_str = f"[{reg}] {pkg}"
+        else:
+            ru = remote_url(srv)
+            pkg_str = f"[remote]" if ru else "—"
+        slug = github_slug(srv)
+        gh_str = slug or "—"
+        table.add_row(str(i), name, desc, pkg_str, gh_str)
+
+    console.print(table)
+
+    # Print suggested install commands
+    console.print("[bold]To add one to your marketplace:[/bold]")
+    for srv in servers[:5]:
+        safe_name = display_name(srv).replace(" ", "-").replace("/", "-").lower()
+        cmd = suggest_flux_add(safe_name, srv)
+        if cmd:
+            console.print(f"  [dim]$[/dim] [green]{cmd}[/green]")
+    console.print()
+
+    # --add: interactively add one
+    if args.add:
+        _search_add(console, servers)
+
+
+def _search_add(console: object, servers: list[dict]) -> None:
+    """Prompt user to pick a server from search results and add it."""
+    try:
+        choice = input("Enter number to add (or Enter to skip): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not choice:
+        return
+    try:
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(servers):
+            raise ValueError
+    except ValueError:
+        console.print("[red]Invalid selection.[/red]")
+        return
+
+    srv = servers[idx]
+    name = display_name(srv)
+    # Slugify name for CLI use
+    safe_name = name.replace(" ", "-").replace("/", "-").lower()
+
+    reg, pkg = best_package(srv)
+    slug = github_slug(srv)
+
+    # Offer a name override
+    try:
+        custom = input(f"Name in marketplace [{safe_name}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if custom:
+        safe_name = custom
+
+    if reg == "npm" and pkg:
+        console.print(f"\n[dim]Running:[/dim] flux add mcp {safe_name} --npx {pkg}\n")
+        os.execvp("flux", ["flux", "add", "mcp", safe_name, "--npx", pkg])
+    elif slug:
+        console.print(f"\n[dim]Running:[/dim] flux add mcp {safe_name} --github {slug}\n")
+        os.execvp("flux", ["flux", "add", "mcp", safe_name, "--github", slug])
+    else:
+        console.print("[yellow]Cannot auto-add — no npm package or GitHub repo found.[/yellow]")
+        console.print(f"Try: flux add mcp {safe_name} --github <user/repo>")
+
+def cmd_list(args: argparse.Namespace) -> None:
+    """flux list — show available MCPs and skills."""
+    manifest = load_manifest()
+    reg = load_registry()
+
+    # Merge legacy manifest and v1 registry (v1 takes precedence)
+    all_mcps: dict[str, Any] = {}
+    all_skills: dict[str, Any] = {}
+    for name, data in manifest.get('mcp_definitions', {}).items():
+        all_mcps[name] = data
+    for name, data in reg.get('mcp_definitions', {}).items():
+        all_mcps[name] = data  # v1 registry wins
+    for name, data in manifest.get('skill_definitions', {}).items():
+        all_skills[name] = data
+    for name, data in reg.get('skill_definitions', {}).items():
+        all_skills[name] = data
+
+    type_filter = getattr(args, 'type', None)
+
+    # --json output
+    if getattr(args, 'json_output', False):
+        output: dict[str, Any] = {}
+        if type_filter != "skill":
+            output["mcp_definitions"] = all_mcps
+        if type_filter != "mcp":
+            output["skill_definitions"] = all_skills
+        print(json.dumps(output, indent=2))
+        return
+
+    # Rich table output
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+
+    console = Console()
+
+    if type_filter != "skill" and all_mcps:
+        table = Table(title="MCP Servers", box=box.SIMPLE_HEAVY, show_lines=False, expand=True)
+        table.add_column("Name", style="bold cyan", min_width=15, no_wrap=True)
+        table.add_column("Type", style="dim", min_width=12, no_wrap=True)
+        table.add_column("Description", max_width=40)
+        table.add_column("Source", style="blue", max_width=35)
+        table.add_column("Auth", style="yellow", no_wrap=True)
+
+        for name, data in sorted(all_mcps.items()):
+            mcp_type = data.get('type', 'unknown')
+            desc = ", ".join(data.get('tags', [])) or ""
+            source = data.get('source', '') or data.get('source_dir', '')
+            if mcp_type == "npm-package":
+                pkg_args = data.get('args', [])
+                source = next((a for a in pkg_args if not a.startswith('-')), source)
+            elif mcp_type == "uvx-package":
+                pkg_args = data.get('args', [])
+                source = pkg_args[0] if pkg_args else source
+            auth_required = "Yes" if data.get('auth') else "No"
+            table.add_row(name, mcp_type, desc, str(source), auth_required)
+
+        console.print(table)
+
+    if type_filter != "mcp" and all_skills:
+        table = Table(title="Skills", box=box.SIMPLE_HEAVY, show_lines=False, expand=True)
+        table.add_column("Name", style="bold cyan", min_width=15, no_wrap=True)
+        table.add_column("Type", style="dim", min_width=12, no_wrap=True)
+        table.add_column("Description", max_width=40)
+        table.add_column("Source", style="blue", max_width=35)
+        table.add_column("Auth", style="yellow", no_wrap=True)
+
+        for name, data in sorted(all_skills.items()):
+            skill_type = data.get('type', 'unknown')
+            desc = ", ".join(data.get('tags', [])) or ""
+            source = data.get('source', '') or data.get('source_dir', '')
+            auth_required = "Yes" if data.get('auth') else "No"
+            table.add_row(name, skill_type, desc, str(source), auth_required)
+
+        console.print(table)
+
+    if not all_mcps and not all_skills:
+        print("No MCPs or skills registered. Run 'flux add mcp <name> --npx <package>' to get started.")
+    print()
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    """flux init [name] — scaffold a new project.
+
+    Without a name argument, initialises the *current* directory.
+    With a name, creates a subdirectory of the current directory.
+    Registers the project in ~/.flux/projects.json.
+    """
+    from flux_cli.lib.projects import register_project
+
+    name = getattr(args, "name", None)
+
+    if name:
+        project_dir = Path.cwd() / name
+    else:
+        project_dir = Path.cwd()
+        name = project_dir.name
+
+    if (project_dir / "flux.json").exists():
+        print(f"❌ flux.json already exists at {project_dir / 'flux.json'}")
+        sys.exit(1)
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    flux_json = {
+        "name": name,
+        "mcps": [],
+        "skills": [],
+    }
+    save_flux_json(project_dir, flux_json)
+
+    gitignore_path = project_dir / ".gitignore"
+    if gitignore_path.exists():
+        content = gitignore_path.read_text()
+        if ".mcp.json" not in content:
+            with open(gitignore_path, "a") as f:
+                f.write("\n.mcp.json\n")
+    else:
+        gitignore_path.write_text(".mcp.json\n")
+
+    register_project(project_dir, name)
+
+    print(f"✅ Created project '{name}' at {project_dir}")
+    print(f"   Edit {project_dir}/flux.json to declare MCPs and skills")
+    print(f"   Then run: flux sync")
+
+
+def cmd_sync(args: argparse.Namespace) -> None:
+    """flux sync [--all] — generate .mcp.json for the current project or all tracked projects."""
+    from flux_cli.lib.sync import sync_project
+    from flux_cli.lib.projects import list_projects
+
+    reg = load_registry()
+    manifest = load_manifest()
+
+    # Build a combined registry (v1 registry wins, legacy fills gaps)
+    mcp_defs = dict(manifest.get('mcp_definitions', {}))
+    skill_defs = dict(manifest.get('skill_definitions', {}))
+    mcp_defs.update(reg.get('mcp_definitions', {}))
+    skill_defs.update(reg.get('skill_definitions', {}))
+    combined_registry = {
+        "version": reg.get("version", "1.0.0"),
+        "mcp_definitions": mcp_defs,
+        "skill_definitions": skill_defs,
+    }
+
+    sync_all = getattr(args, 'all', False)
+
+    if sync_all:
+        # Sync all tracked projects from ~/.flux/projects.json
+        projects = list_projects()
+        if not projects:
+            print("No tracked projects. Run 'flux init' in a project directory.")
+            return
+
+        print(f"\nSyncing {len(projects)} tracked project(s)...\n")
+        synced, errors_count = 0, 0
+        for proj in projects:
+            project_dir = Path(proj["path"])
+            if not project_dir.exists():
+                print(f"  Warning: {proj['name']} — path no longer exists ({proj['path']})")
+                errors_count += 1
+                continue
+            success, issues = sync_project(project_dir, combined_registry)
+            if not success:
+                print(f"  Skipped: {proj['name']} — {'; '.join(issues)}")
+                continue
+            if issues:
+                errors_count += 1
+                print(f"  Warning: {proj['name']}")
+                for issue in issues:
+                    print(f"    {issue}")
+            else:
+                synced += 1
+                print(f"  Synced: {proj['name']}")
+        print(f"\n  {synced} synced, {errors_count} with issues\n")
+    else:
+        # Sync current directory (or legacy src/ scan for backward compat)
+        target_dir = Path.cwd()
+        flux_json_path = target_dir / "flux.json"
+
+        if flux_json_path.exists():
+            # Sync single project
+            success, issues = sync_project(target_dir, combined_registry)
+            if issues:
+                for issue in issues:
+                    print(f"Error: {issue}")
+                sys.exit(1)
+            flux_json = load_flux_json(target_dir)
+            mcps_count = len(flux_json.get('mcps', [])) if flux_json else 0
+            skills_count = len(flux_json.get('skills', [])) if flux_json else 0
+            print(f"Synced {target_dir.name} — {mcps_count} MCP(s), {skills_count} skill(s)")
+        elif SRC_DIR.exists():
+            # Legacy: scan src/ directory
+            projects = [p for p in sorted(SRC_DIR.iterdir()) if p.is_dir()]
+            if not projects:
+                print("No projects found in src/. Run: flux init <name>")
+                return
+
+            print("\nSyncing Flux projects...\n")
+            synced, skipped, errors_count = 0, 0, 0
+
+            for project in projects:
+                flux_json = load_flux_json(project)
+                if flux_json is None:
+                    skipped += 1
+                    continue
+                project_name = flux_json.get('name', project.name)
+                success, issues = sync_project(project, combined_registry)
+                if issues:
+                    errors_count += 1
+                    print(f"  Warning: {project_name}")
+                    for issue in issues:
+                        print(f"    {issue}")
+                else:
+                    synced += 1
+                    declared_mcps = flux_json.get('mcps', [])
+                    declared_skills = flux_json.get('skills', [])
+                    mcp_summary = f"{len(declared_mcps)} MCP(s)" if declared_mcps else "no MCPs"
+                    skill_summary = f"{len(declared_skills)} skill(s)" if declared_skills else "no skills"
+                    print(f"  Synced: {project_name} — {mcp_summary}, {skill_summary}")
+
+            print(f"\n  {synced} synced, {skipped} skipped (no flux.json), {errors_count} with issues\n")
+        else:
+            print(f"No flux.json in current directory and no src/ directory found.")
+            print(f"Run 'flux init' to create a project, or 'flux sync --all' to sync all tracked projects.")
+            sys.exit(1)
+
+
+def detect_and_run_build(dest: Path, entry: dict) -> None:
+    """Auto-detect build requirements and run the build. Updates entry with build_cmd."""
+    pkg_json = dest / "package.json"
+    if pkg_json.exists():
+        with open(pkg_json) as f:
+            pkg = json.load(f)
+        if "build" in pkg.get("scripts", {}):
+            build_cmd = "npm install && npm run build"
+            entry["build_cmd"] = build_cmd
+            print(f"  🔨 Building (npm)...")
+            result = subprocess.run(build_cmd, shell=True, cwd=dest, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"  ✅ Build complete")
+            else:
+                print(f"  ⚠️  Build failed:\n{result.stderr[-500:].strip()}")
+    # pyproject.toml → uv handles venv automatically, no explicit build needed
+
+
+def cmd_add(args: argparse.Namespace) -> None:
+    """flux add mcp/skill — register a new MCP or skill to the registry."""
+    manifest = load_manifest()
+    reg = load_registry()
+    entry_type = args.entry_type  # 'mcp' or 'skill'
+    name = args.name
+
+    # Validate name
+    ok, reason = validate_name(name)
+    if not ok:
+        print(f"❌ Invalid name '{name}': {reason}")
+        sys.exit(1)
+
+    if entry_type == "mcp":
+        registry_key = 'mcp_definitions'
+        if reg[registry_key].get(name) or manifest[registry_key].get(name):
+            print(f"❌ MCP '{name}' already exists. Use 'flux remove {name}' first.")
+            sys.exit(1)
+
+        entry = {"tags": args.tags.split(",") if args.tags else []}
+
+        # Keychain auth support
+        keychain_vars = getattr(args, 'keychain', None)
+        if keychain_vars:
+            entry["auth"] = {
+                "type": "keychain",
+                "env_vars": [v.strip() for v in keychain_vars.split(",")],
+                "fix_description": f"Run: flux secret set {name} <VAR> <value>",
+            }
+
+        # Build / setup commands
+        build_cmd = getattr(args, 'build_cmd', None)
+        if build_cmd:
+            entry["build_cmd"] = build_cmd
+        setup_cmd = getattr(args, 'setup_cmd', None)
+        if setup_cmd:
+            entry.setdefault("auth", {})["setup_cmd"] = setup_cmd.split()
+
+        if args.uvx:
+            # PyPI package via uvx
+            base_args = [args.uvx]
+            if args.args:
+                base_args += args.args.split()
+            entry.update({"type": "uvx-package", "command": "uvx", "args": base_args})
+        elif args.npx:
+            # npm package — register the command; extra_args allow static additional args
+            base_args = ["-y", args.npx]
+            if args.args:
+                base_args += args.args.split()
+            entry.update({"type": "npm-package", "command": "npx", "args": base_args})
+        elif args.github:
+            # Clone into v1 mcps dir
+            dest = v1_mcps_dir() / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            print(f"  Cloning: {args.github} -> {dest}")
+            subprocess.run(
+                ["git", "clone", f"https://github.com/{args.github}", str(dest)],
+                check=True,
+            )
+            entry.update({"type": "github", "source": args.github, "source_dir": str(dest)})
+            if args.command:
+                run_args = args.args.split() if args.args else []
+                entry.update({"command": args.command, "args": run_args})
+            detect_and_run_build(dest, entry)
+
+            # Also add to legacy manifest for backward compat
+            source_dir_legacy = str(dest.relative_to(FLUX_ROOT)) if str(dest).startswith(str(FLUX_ROOT)) else str(dest)
+            legacy_entry = {**entry, "type": "git-submodule", "source_dir": source_dir_legacy}
+            legacy_entry.pop("source", None)
+            manifest[registry_key][name] = legacy_entry
+            save_manifest(manifest)
+        elif args.local:
+            source = Path(args.local).resolve()
+            dest = v1_mcps_dir() / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(source, dest)
+            entry.update({"type": "local", "source_dir": str(dest)})
+            if args.command:
+                entry.update({"command": args.command, "args": args.args.split() if args.args else []})
+        else:
+            print("❌ Specify a source: --uvx <package>, --npx <package>, --github <user/repo>, or --local <path>")
+            sys.exit(1)
+
+        reg[registry_key][name] = entry
+        save_registry(reg)
+        # Also keep legacy manifest in sync for npm/uvx
+        if args.npx or args.uvx:
+            manifest[registry_key][name] = entry
+            save_manifest(manifest)
+        print(f"✅ Registered MCP '{name}'")
+
+        run_setup = entry.get('auth', {}).get('setup_cmd')
+        if run_setup:
+            print(f"  Running setup: {' '.join(run_setup)}")
+            result = subprocess.run(run_setup)
+            if result.returncode == 0:
+                print(f"  Setup complete")
+            else:
+                print(f"  Setup failed (exit {result.returncode}) — run manually: {' '.join(run_setup)}")
+
+    elif entry_type == "skill":
+        registry_key = 'skill_definitions'
+        if reg[registry_key].get(name) or manifest[registry_key].get(name):
+            print(f"❌ Skill '{name}' already exists. Use 'flux remove {name}' first.")
+            sys.exit(1)
+
+        # Validate name
+        entry = {"tags": args.tags.split(",") if args.tags else []}
+
+        if args.github:
+            dest = v1_skills_dir() / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            print(f"  Cloning: {args.github} -> {dest}")
+            subprocess.run(
+                ["git", "clone", f"https://github.com/{args.github}", str(dest)],
+                check=True,
+            )
+            entry.update({"type": "github", "source": args.github, "source_dir": str(dest)})
+
+            # Warn if no SKILL.md found
+            if not (dest / "SKILL.md").exists():
+                print(f"  Warning: No SKILL.md found in {dest}. Consider adding one for discoverability.")
+        elif args.local:
+            source = Path(args.local).resolve()
+            dest = v1_skills_dir() / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(source, dest)
+            entry.update({"type": "local", "source_dir": str(dest)})
+
+            # Warn if no SKILL.md found
+            if not (dest / "SKILL.md").exists():
+                print(f"  Warning: No SKILL.md found in {dest}. Consider adding one for discoverability.")
+        else:
+            print("❌ Specify a source: --github <user/repo> or --local <path>")
+            sys.exit(1)
+
+        reg[registry_key][name] = entry
+        save_registry(reg)
+        print(f"✅ Registered skill '{name}'")
+
+
+def remove_submodule(source_dir: str) -> None:
+    """Fully remove a git submodule: deinit, git rm, clean .git/modules."""
+    rel_path = source_dir  # e.g. "marketplace/mcps/monica-mcp"
+    abs_modules_path = FLUX_ROOT / ".git" / "modules" / rel_path
+    subprocess.run(["git", "submodule", "deinit", "-f", rel_path], cwd=FLUX_ROOT, capture_output=True)
+    subprocess.run(["git", "rm", "-f", rel_path], cwd=FLUX_ROOT, capture_output=True)
+    if abs_modules_path.exists():
+        shutil.rmtree(abs_modules_path)
+
+
+def _warn_if_in_use(name: str) -> None:
+    """Print a warning if *name* is referenced in any project's flux.json."""
+    if not SRC_DIR.exists():
+        return
+    for project in sorted(SRC_DIR.iterdir()):
+        if not project.is_dir():
+            continue
+        fj = load_flux_json(project)
+        if fj is None:
+            continue
+        if name in fj.get("mcps", []) or name in fj.get("skills", []):
+            print(f"  Warning: '{name}' is used by project '{fj.get('name', project.name)}'")
+
+
+def cmd_remove(args: argparse.Namespace) -> None:
+    """flux remove <name> — unregister an MCP or skill from the registry."""
+    manifest = load_manifest()
+    reg = load_registry()
+    name = args.name
+
+    # Check both registry and legacy manifest
+    found = False
+
+    # Check v1 registry first
+    for section in ("mcp_definitions", "skill_definitions"):
+        if name in reg.get(section, {}):
+            data = reg[section][name]
+            # Delete cloned source if it exists (validate path is under ~/.flux/)
+            source_dir = data.get("source_dir")
+            if source_dir and Path(source_dir).exists() and data.get("type") in ("github", "local"):
+                from flux_cli.lib.paths import flux_home
+                resolved = Path(source_dir).resolve()
+                if str(resolved).startswith(str(flux_home().resolve())):
+                    shutil.rmtree(source_dir)
+                    print(f"  Deleted cloned source: {source_dir}")
+                else:
+                    print(f"  Skipped deletion: {source_dir} is outside ~/.flux/")
+            _warn_if_in_use(name)
+            del reg[section][name]
+            save_registry(reg)
+            found = True
+            kind = "MCP" if section == "mcp_definitions" else "skill"
+            print(f"✅ Removed {kind} '{name}' from registry")
+            break
+
+    # Also remove from legacy manifest
+    mcps = manifest.get('mcp_definitions', {})
+    skills = manifest.get('skill_definitions', {})
+
+    if name in mcps:
+        data = mcps[name]
+        if not found:
+            # Only clean up submodule if not already handled by v1
+            if data.get('type') in ('git-submodule',) and data.get('source_dir'):
+                remove_submodule(data['source_dir'])
+            _warn_if_in_use(name)
+        del manifest['mcp_definitions'][name]
+        save_manifest(manifest)
+        if not found:
+            print(f"✅ Removed MCP '{name}' from marketplace")
+        found = True
+    elif name in skills:
+        data = skills[name]
+        if not found:
+            if data.get('type') == 'git-submodule' and data.get('source_dir'):
+                remove_submodule(data['source_dir'])
+            _warn_if_in_use(name)
+        del manifest['skill_definitions'][name]
+        save_manifest(manifest)
+        if not found:
+            print(f"✅ Removed skill '{name}' from marketplace")
+        found = True
+
+    if not found:
+        print(f"❌ '{name}' not found in registry or marketplace")
+        sys.exit(1)
+
+    print(f"   Note: run 'flux sync' to regenerate project configurations")
+
+
+def cmd_install(args: argparse.Namespace) -> None:
+    """flux install <name> [name ...] — add MCPs/skills to the current project and sync."""
+    from flux_cli.lib.projects import register_project
+    from flux_cli.lib.sync import sync_project
+
+    reg = load_registry()
+    names = args.names
+    target_dir = Path.cwd()
+
+    mcp_defs = reg.get('mcp_definitions', {})
+    skill_defs = reg.get('skill_definitions', {})
+
+    # Also merge legacy manifest definitions
+    manifest = load_manifest()
+    for k, v in manifest.get('mcp_definitions', {}).items():
+        mcp_defs.setdefault(k, v)
+    for k, v in manifest.get('skill_definitions', {}).items():
+        skill_defs.setdefault(k, v)
+
+    # Load or create flux.json for this project
+    flux_json = load_flux_json(target_dir)
+    if flux_json is None:
+        flux_json = {"name": target_dir.name, "mcps": [], "skills": []}
+
+    any_changed = False
+    has_errors = False
+
+    for name in names:
+        if name not in mcp_defs and name not in skill_defs:
+            all_names = sorted(list(mcp_defs.keys()) + list(skill_defs.keys()))
+            print(f"Error: '{name}' not found in registry.")
+            if all_names:
+                print(f"   Available: {', '.join(all_names)}")
+            has_errors = True
+            continue
+
+        if name in mcp_defs:
+            if name in flux_json.setdefault('mcps', []):
+                print(f"Skipped: MCP '{name}' already installed")
+                continue
+            flux_json['mcps'].append(name)
+            print(f"Added MCP '{name}' to flux.json")
+            any_changed = True
+        else:
+            if name in flux_json.setdefault('skills', []):
+                print(f"Skipped: skill '{name}' already installed")
+                continue
+            flux_json['skills'].append(name)
+
+            # Copy skill files into project .claude/skills/
+            skill_data = skill_defs[name]
+            source_dir = skill_data.get('source_dir', '')
+            from flux_cli.lib.paths import skills_dir as v1_skills_dir_fn
+            source_path = Path(source_dir) if source_dir and Path(source_dir).is_absolute() else (
+                v1_skills_dir_fn() / name
+            )
+            if not source_path.exists() and source_dir:
+                source_path = FLUX_ROOT / source_dir
+            dest_path = target_dir / ".claude" / "skills" / name
+            if source_path.exists():
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                if dest_path.exists():
+                    shutil.rmtree(dest_path)
+                shutil.copytree(source_path, dest_path)
+            print(f"Added skill '{name}' to flux.json")
+            any_changed = True
+
+    if has_errors and not any_changed:
+        sys.exit(1)
+
+    if any_changed:
+        save_flux_json(target_dir, flux_json)
+        register_project(target_dir, flux_json.get("name", target_dir.name))
+
+    # Auto-sync: rebuild combined registry for sync
+    combined_registry = {
+        "version": reg.get("version", "1.0.0"),
+        "mcp_definitions": mcp_defs,
+        "skill_definitions": skill_defs,
+    }
+    print(f"Syncing {target_dir.name}...")
+    success, issues = sync_project(target_dir, combined_registry)
+    if issues:
+        for issue in issues:
+            print(f"  Warning: {issue}")
+    else:
+        print(f"Synced {target_dir.name}")
+
+
+def cmd_uninstall(args: argparse.Namespace) -> None:
+    """flux uninstall <name> [name ...] — remove MCPs/skills from current project and sync."""
+    from flux_cli.lib.sync import sync_project
+
+    reg = load_registry()
+    names = args.names
+    target_dir = Path.cwd()
+
+    flux_json = load_flux_json(target_dir)
+    if flux_json is None:
+        print(f"Error: No flux.json found in {target_dir}")
+        sys.exit(1)
+
+    mcp_defs = reg.get('mcp_definitions', {})
+    skill_defs = reg.get('skill_definitions', {})
+    manifest = load_manifest()
+    for k, v in manifest.get('mcp_definitions', {}).items():
+        mcp_defs.setdefault(k, v)
+    for k, v in manifest.get('skill_definitions', {}).items():
+        skill_defs.setdefault(k, v)
+
+    any_changed = False
+    has_errors = False
+
+    for name in names:
+        in_mcps = name in flux_json.get('mcps', [])
+        in_skills = name in flux_json.get('skills', [])
+
+        if not in_mcps and not in_skills:
+            print(f"Error: '{name}' is not installed in this project")
+            has_errors = True
+            continue
+
+        if in_mcps:
+            flux_json['mcps'].remove(name)
+            print(f"Removed MCP '{name}' from flux.json")
+            any_changed = True
+
+        if in_skills:
+            flux_json['skills'].remove(name)
+            # Remove copied skill directory (use Path.name to prevent traversal)
+            safe_name = Path(name).name
+            skills_parent = target_dir / ".claude" / "skills"
+            skill_dir = skills_parent / safe_name
+            if skill_dir.exists() and skill_dir.resolve().is_relative_to(skills_parent.resolve()):
+                shutil.rmtree(skill_dir)
+            print(f"Removed skill '{name}' from flux.json")
+            any_changed = True
+
+    if has_errors and not any_changed:
+        sys.exit(1)
+
+    if any_changed:
+        save_flux_json(target_dir, flux_json)
+
+    # Auto-sync
+    combined_registry = {
+        "version": reg.get("version", "1.0.0"),
+        "mcp_definitions": mcp_defs,
+        "skill_definitions": skill_defs,
+    }
+    print(f"Syncing {target_dir.name}...")
+    success, issues = sync_project(target_dir, combined_registry)
+    if issues:
+        for issue in issues:
+            print(f"  Warning: {issue}")
+    else:
+        print(f"Synced {target_dir.name}")
+
+
+STATUS_STYLE = {
+    "connected": "[bold green]connected[/]",
+    "running": "[yellow]running[/]",
+    "auth_required": "[bold red]auth_required[/]",
+    "timeout": "[red]timeout[/]",
+    "error": "[red]error[/]",
+    "failed": "[bold red]failed[/]",
+}
+
+
+def _status_table(title: str, rows: list[dict]) -> None:
+    """Print a Rich table of MCP probe results."""
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    table = Table(title=title, show_lines=False)
+    table.add_column("MCP Name", style="cyan", no_wrap=True)
+    table.add_column("Status")
+    table.add_column("Tools", justify="right")
+    table.add_column("Detail")
+
+    for r in rows:
+        styled = STATUS_STYLE.get(r["status"], r["status"])
+        tools_str = str(r["tools_count"]) if r["tools_count"] is not None else "-"
+        table.add_row(r["name"], styled, tools_str, r.get("detail", ""))
+    console.print(table)
+
+
+def _probe_project_servers(project_dir: Path, mcp_registry: dict) -> list[dict]:
+    """Probe all MCP servers in a project directory and return result rows."""
+    mcp_file = project_dir / ".mcp.json"
+    if not mcp_file.exists():
+        return []
+    with open(mcp_file, 'r') as f:
+        mcp_config = json.load(f)
+    servers = mcp_config.get('mcpServers', {})
+    if not servers:
+        return []
+    rows = []
+    for name, config in enrich_with_marketplace(servers, mcp_registry).items():
+        result = probe_mcp_server_detailed(config)
+        rows.append({"name": name, "status": result["status"],
+                      "tools_count": result["tools_count"],
+                      "detail": result["detail"]})
+    return rows
+
+
+def print_project_mcp_status(project_dir: Path, mcp_registry: dict) -> bool:
+    """Print health status for each MCP in a project. Returns True if any MCPs found."""
+    rows = _probe_project_servers(project_dir, mcp_registry)
+    if not rows:
+        return False
+    _status_table(f"  {project_dir.name}", rows)
+    return True
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    """flux status — show MCP server health for current project or all projects."""
+    print("\nChecking MCP server health...\n")
+    mcp_registry = load_manifest().get('mcp_definitions', {})
+
+    if args.all:
+        from flux_cli.lib.projects import list_projects
+
+        tracked = list_projects()
+        if not tracked:
+            print("No tracked projects. Run 'flux init' in a project directory.")
+            return
+
+        found_any = False
+        for entry in tracked:
+            project = Path(entry["path"])
+            if not project.exists():
+                print(f"📁 {entry['name']} — path no longer exists ({entry['path']})")
+                print()
+                continue
+            flux_json = load_flux_json(project)
+            label = flux_json.get('name', project.name) if flux_json else entry['name']
+            declared = flux_json.get('mcps', []) if flux_json else []
+            has_mcp_file = (project / ".mcp.json").exists()
+
+            if flux_json or has_mcp_file:
+                if declared and not has_mcp_file:
+                    print(f"  {label}: Declares MCPs but no .mcp.json — run: flux sync\n")
+                else:
+                    rows = _probe_project_servers(project, mcp_registry)
+                    if rows:
+                        _status_table(label, rows)
+                    else:
+                        print(f"  {label}: no MCP servers configured\n")
+                found_any = True
+
+        if not found_any:
+            print("No projects found. Run: flux init <name>")
+    else:
+        target_dir = Path.cwd()
+        mcp_file = target_dir / ".mcp.json"
+        flux_json = load_flux_json(target_dir)
+
+        if flux_json and not mcp_file.exists():
+            print(f"flux.json found but no .mcp.json — run: flux sync")
+            return
+
+        if not mcp_file.exists():
+            print(f"No .mcp.json in {target_dir.name}/ — run: flux install <name>")
+            return
+
+        with open(mcp_file, 'r') as f:
+            mcp_config = json.load(f)
+        servers = mcp_config.get('mcpServers', {})
+        rows = []
+        for name, config in enrich_with_marketplace(servers, mcp_registry).items():
+            result = probe_mcp_server_detailed(config)
+            rows.append({"name": name, "status": result["status"],
+                          "tools_count": result["tools_count"],
+                          "detail": result["detail"]})
+        if rows:
+            _status_table(target_dir.name, rows)
+    print()
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """flux doctor — check and auto-fix the Flux environment."""
+    print("\n🩺 FLUX DOCTOR — Environment Health Check\n")
+    all_ok = True
+
+    def check_and_fix(label: str, condition: bool, fix_fn: object = None, fix_desc: str | None = None) -> None:
+        nonlocal all_ok
+        if condition:
+            print(f"  ✅ {label}")
+        else:
+            all_ok = False
+            if fix_fn:
+                try:
+                    fix_fn()
+                    print(f"  🔧 {label} — fixed")
+                except Exception as e:
+                    print(f"  ❌ {label}")
+                    print(f"     Could not auto-fix: {e}")
+                    if fix_desc:
+                        print(f"     Manual fix: {fix_desc}")
+            else:
+                print(f"  ❌ {label}")
+                if fix_desc:
+                    print(f"     Fix: {fix_desc}")
+
+    # ---- Comprehensive environment checks via health module ----
+    # Gather data for the check functions
+    reg_path = MARKETPLACE_DIR / "marketplace.json"
+    try:
+        manifest = load_manifest()
+        mcp_defs = manifest.get('mcp_definitions', {})
+    except SystemExit:
+        mcp_defs = {}
+
+    try:
+        secrets_idx = load_secrets_index()
+    except Exception:
+        secrets_idx = {}
+
+    checks = run_doctor_checks(
+        flux_root=FLUX_ROOT,
+        registry_path=reg_path,
+        mcp_definitions=mcp_defs,
+        secrets_index=secrets_idx,
+    )
+
+    print("  📦 Environment & Dependencies")
+    for c in checks:
+        if c.passed:
+            print(f"  ✅ {c.label}")
+        elif c.warning:
+            all_ok = False
+            print(f"  ⚠️  {c.label}")
+            if c.fix_hint:
+                print(f"     Fix: {c.fix_hint}")
+        else:
+            all_ok = False
+            print(f"  ❌ {c.label}")
+            if c.fix_hint:
+                print(f"     Fix: {c.fix_hint}")
+
+    # ---- Flux-specific structural fixes (auto-fixable) ----
+    print("\n  🔧 Flux CLI")
+    flux_bin = BIN_DIR / "flux"
+    check_and_fix("flux CLI is executable", os.access(flux_bin, os.X_OK),
+                  fix_fn=lambda: flux_bin.chmod(0o755))
+
+    zshrc = Path.home() / ".zshrc"
+    path_line = f'export PATH="{BIN_DIR}:$PATH"'
+    has_path = shutil.which("flux") is not None or (zshrc.exists() and str(BIN_DIR) in zshrc.read_text())
+    def fix_path():
+        with open(zshrc, 'a') as f:
+            f.write(f'\n{path_line}\n')
+    check_and_fix("flux bin is on PATH", has_path, fix_fn=fix_path,
+                  fix_desc=f"Add to ~/.zshrc: {path_line}")
+
+    print("\n  🔗 Claude Symlink")
+    claude_dir = Path.home() / ".claude"
+    core_dir = FLUX_ROOT / "core"
+    is_symlink = claude_dir.is_symlink()
+    points_to_core = is_symlink and claude_dir.resolve() == core_dir.resolve()
+
+    def fix_symlink():
+        if claude_dir.is_symlink():
+            claude_dir.unlink()
+        elif claude_dir.exists():
+            # Never delete a real ~/.claude directory — it may contain user data
+            backup = claude_dir.with_name(".claude.backup")
+            print(f"  ⚠️  Moving existing ~/.claude to {backup}")
+            claude_dir.rename(backup)
+        claude_dir.symlink_to(core_dir)
+
+    check_and_fix("~/.claude → ~/flux/core", points_to_core, fix_fn=fix_symlink)
+
+    # Detect and remove circular symlink that Claude Code creates when run inside core/
+    circular = core_dir / ".claude"
+    def fix_circular():
+        circular.unlink()
+    check_and_fix("No circular core/.claude symlink", not circular.exists(),
+                  fix_fn=fix_circular,
+                  fix_desc="rm ~/flux/core/.claude")
+
+    # MCP health across all projects
+    if SRC_DIR.exists():
+        mcp_registry = mcp_defs
+        mcp_failures = []
+
+        for project in sorted(SRC_DIR.iterdir()):
+            if not project.is_dir():
+                continue
+            mcp_file = project / ".mcp.json"
+            if not mcp_file.exists():
+                continue
+            with open(mcp_file, 'r') as f:
+                mcp_config = json.load(f)
+            for mcp_name, server_config in mcp_config.get('mcpServers', {}).items():
+                if mcp_name in mcp_registry:
+                    server_config = {**server_config, **{
+                        k: v for k, v in mcp_registry[mcp_name].items() if k not in server_config
+                    }}
+                status, reason = probe_mcp_server(server_config)
+                if status not in ("connected", "running"):
+                    mcp_failures.append((project.name, mcp_name, status, reason, server_config))
+
+        if mcp_failures:
+            print(f"\n  🌐 MCP Server Issues ({len(mcp_failures)} found)")
+            for project_name, mcp_name, status, reason, server_config in mcp_failures:
+                auth = server_config.get('auth', {})
+                fix_cmd = auth.get('fix_cmd')
+                print(f"\n  ❌ {project_name}/{mcp_name} — {status}: {reason}")
+                if fix_cmd and status == "auth_required":
+                    # Validate fix_cmd is a list of strings before execution
+                    if not isinstance(fix_cmd, list) or not all(isinstance(c, str) for c in fix_cmd):
+                        print(f"     ⚠️  Skipping invalid fix_cmd: {fix_cmd!r}")
+                        continue
+                    print(f"     🔧 Running: {' '.join(fix_cmd)}")
+                    try:
+                        result = subprocess.run(fix_cmd, timeout=120)  # noqa: S603
+                        if result.returncode == 0:
+                            new_status, _ = probe_mcp_server(server_config)
+                            if new_status in ("connected", "running"):
+                                print(f"     ✅ Auth refreshed — {mcp_name} is now {new_status}")
+                            else:
+                                print(f"     ⚠️  Auth ran but server still reports: {new_status}")
+                        else:
+                            print(f"     ❌ Auth fix failed (exit {result.returncode})")
+                    except subprocess.TimeoutExpired:
+                        print(f"     ❌ Auth fix timed out")
+                    except Exception as e:
+                        print(f"     ❌ {e}")
+                else:
+                    print(f"     Fix: {auth.get('fix_description', reason)}")
+        elif list(SRC_DIR.iterdir()):
+            print(f"\n  🌐 MCP Servers")
+            print(f"  ✅ All configured MCP servers are healthy")
+
+    print()
+    if all_ok:
+        print("✅ All checks passed — Flux environment is healthy!\n")
+    else:
+        print("⚠️  Some issues were found. Auto-fixes applied where possible.\n")
+
+
+def cmd_secret(args: argparse.Namespace) -> None:
+    """flux secret set/get/list/delete — manage MCP secrets via pluggable backend."""
+    import getpass
+    subcmd = args.subcmd
+    backend = get_backend()
+
+    if subcmd == "set":
+        value = args.value or getpass.getpass(f"Value for {args.mcp}/{args.key}: ")
+        backend.set(args.mcp, args.key, value)
+        print(f"Stored {args.key} for '{args.mcp}'")
+        print(f"   Run 'flux sync' to inject into .mcp.json")
+
+    elif subcmd == "get":
+        value = backend.get(args.mcp, args.key)
+        if value is not None:
+            print(value)
+        else:
+            print(f"No secret found for {args.mcp}/{args.key}")
+            sys.exit(1)
+
+    elif subcmd == "list":
+        index = backend.list_keys(args.mcp if hasattr(args, "mcp") else None)
+        if args.mcp:
+            keys = index.get(args.mcp, [])
+            if keys:
+                print(f"Secrets for '{args.mcp}':")
+                for k in keys:
+                    stored = backend.get(args.mcp, k)
+                    masked = ("*" * 8) if stored else "(missing)"
+                    print(f"  {k} = {masked}")
+            else:
+                print(f"No secrets stored for '{args.mcp}'")
+        else:
+            if index:
+                print("Stored Flux secrets (use 'flux secret get <mcp> <key>' to retrieve):")
+                for mcp, keys in sorted(index.items()):
+                    print(f"\n  [{mcp}]")
+                    for k in keys:
+                        stored = backend.get(mcp, k)
+                        masked = ("*" * 8) if stored else "(missing)"
+                        print(f"    {k} = {masked}")
+            else:
+                print("No secrets stored.")
+                manifest = load_manifest()
+                needs_secrets = [
+                    (name, data['auth']['env_vars'])
+                    for name, data in manifest.get('mcp_definitions', {}).items()
+                    if data.get('auth', {}).get('env_vars')
+                ]
+                if needs_secrets:
+                    print("\nMCPs that require secrets:")
+                    for name, env_vars in needs_secrets:
+                        print(f"  {name}: {', '.join(env_vars)}")
+                    print(f"\nExample: flux secret set monica MONICA_API_TOKEN")
+
+    elif subcmd == "delete":
+        backend.delete(args.mcp, args.key)
+        print(f"Deleted {args.key} for '{args.mcp}'")
+        print(f"   Run 'flux sync' to update .mcp.json")
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    """flux setup — initialise ~/.flux/ or run setup_cmd for a specific MCP."""
+    name = getattr(args, 'name', None)
+
+    if not name:
+        # --- Fresh install / migration mode ---
+        from flux_cli.lib.setup import run_setup
+
+        print("\n  FLUX SETUP\n")
+        result = run_setup()
+
+        if result.dirs_created:
+            print(f"  Created directories: {len(result.dirs_created)}")
+            for d in result.dirs_created:
+                print(f"    {d}")
+
+        if result.config_written:
+            print("  Wrote config.toml with platform defaults")
+        else:
+            print("  config.toml already exists — skipped")
+
+        if result.skill_installed:
+            print("  Installed Flux skill to ~/.claude/skills/flux/SKILL.md")
+        else:
+            print("  Flux skill not installed (bundled data missing)")
+
+        if result.missing_deps:
+            print(f"\n  Missing dependencies: {', '.join(result.missing_deps)}")
+        else:
+            print("  All dependencies found")
+
+        mig = result.migration
+        if mig and mig.detected:
+            print("\n  Migration from old layout:")
+            print(f"    Registry entries: {mig.registry_entries}")
+            if mig.mcps_copied:
+                print(f"    MCPs copied: {', '.join(mig.mcps_copied)}")
+            if mig.skills_copied:
+                print(f"    Skills copied: {', '.join(mig.skills_copied)}")
+        elif mig and not mig.detected:
+            print("  No old marketplace layout detected — nothing to migrate")
+
+        print("\n  Setup complete.\n")
+        return
+
+    # --- MCP-specific setup_cmd mode ---
+    manifest = load_manifest()
+    entry = manifest.get('mcp_definitions', {}).get(name)
+    if not entry:
+        print(f"❌ MCP '{name}' not found in marketplace")
+        sys.exit(1)
+
+    setup_cmd = entry.get('auth', {}).get('setup_cmd')
+    if not setup_cmd:
+        print(f"ℹ️  '{name}' has no setup_cmd configured — nothing to run")
+        return
+
+    print(f"🔧 Running setup for '{name}': {' '.join(setup_cmd)}")
+    result = subprocess.run(setup_cmd)
+    if result.returncode == 0:
+        print(f"✅ Setup complete for '{name}'")
+    else:
+        print(f"⚠️  Setup failed (exit {result.returncode})")
+        sys.exit(result.returncode)
+
+
+def cmd_upgrade(args: argparse.Namespace) -> None:
+    """flux upgrade — update all/named cloned repos and marketplace git submodules."""
+    manifest = load_manifest()
+    reg = load_registry()
+    dry_run = getattr(args, 'dry_run', False)
+    target_names = getattr(args, 'names', None) or []
+
+    print("\n  FLUX UPGRADE" + (" (dry run)" if dry_run else "") + "\n")
+
+    updated = 0
+
+    # 1. Update v1 registry cloned repos (type=github)
+    all_mcps = {**manifest.get('mcp_definitions', {}), **reg.get('mcp_definitions', {})}
+    all_skills = {**manifest.get('skill_definitions', {}), **reg.get('skill_definitions', {})}
+
+    cloned_items = {}
+    for name, data in {**all_mcps, **all_skills}.items():
+        if data.get('type') in ('github', 'git-submodule') and data.get('source_dir'):
+            if target_names and name not in target_names:
+                continue
+            cloned_items[name] = data
+
+    for name, data in cloned_items.items():
+        source_dir = Path(data['source_dir'])
+        if not source_dir.exists():
+            continue
+        git_dir = source_dir / ".git"
+        if not git_dir.exists():
+            continue
+
+        # Check for local modifications
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=source_dir, capture_output=True, text=True,
+        )
+        if status_result.stdout.strip():
+            print(f"  Warning: {name} has local modifications — skipping")
+            continue
+
+        # Get current SHA
+        old_sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source_dir, capture_output=True, text=True,
+        )
+        old_sha = old_sha_result.stdout.strip()[:8] if old_sha_result.returncode == 0 else "unknown"
+
+        if dry_run:
+            # Fetch to see if there are updates
+            subprocess.run(["git", "fetch"], cwd=source_dir, capture_output=True, text=True)
+            behind = subprocess.run(
+                ["git", "rev-list", "HEAD..@{u}", "--count"],
+                cwd=source_dir, capture_output=True, text=True,
+            )
+            count = behind.stdout.strip() if behind.returncode == 0 else "?"
+            if count != "0":
+                print(f"  {name}: {count} commit(s) behind ({old_sha})")
+                updated += 1
+            else:
+                print(f"  {name}: up to date ({old_sha})")
+            continue
+
+        # Pull latest
+        pull_result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=source_dir, capture_output=True, text=True,
+        )
+        if pull_result.returncode != 0:
+            print(f"  Warning: {name} pull failed — {pull_result.stderr.strip()}")
+            continue
+
+        new_sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source_dir, capture_output=True, text=True,
+        )
+        new_sha = new_sha_result.stdout.strip()[:8] if new_sha_result.returncode == 0 else "unknown"
+
+        if old_sha != new_sha:
+            print(f"  {name}: {old_sha} -> {new_sha}")
+            updated += 1
+
+            # Re-run build_cmd if defined
+            build_cmd = data.get('build_cmd')
+            if build_cmd:
+                print(f"    Rebuilding ({build_cmd})...")
+                build_result = subprocess.run(
+                    build_cmd, shell=True, cwd=source_dir, capture_output=True, text=True,  # noqa: S602
+                )
+                if build_result.returncode == 0:
+                    print(f"    Build complete")
+                else:
+                    print(f"    Warning: build failed — {build_result.stderr[-300:].strip()}")
+        else:
+            print(f"  {name}: up to date ({old_sha})")
+
+    # 2. Update legacy git submodules (if no specific names targeted)
+    if not target_names and not dry_run:
+        print("\n  Updating git submodules...")
+        result = subprocess.run(
+            ["git", "submodule", "update", "--remote", "--merge"],
+            cwd=FLUX_ROOT, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            if result.stdout.strip():
+                for line in result.stdout.strip().splitlines():
+                    print(f"    {line}")
+            else:
+                print("    All submodules up to date")
+        else:
+            print(f"    Warning: submodule update had issues:\n{result.stderr.strip()}")
+
+    # 3. Re-run build_cmd for submodule MCPs that need it
+    if not dry_run:
+        submodule_mcps = {
+            name: data for name, data in manifest.get('mcp_definitions', {}).items()
+            if data.get('type') == 'git-submodule' and data.get('build_cmd')
+            and (not target_names or name in target_names)
+        }
+        if submodule_mcps:
+            print(f"\n  Rebuilding submodule MCPs...")
+            for name, data in submodule_mcps.items():
+                dest = FLUX_ROOT / data['source_dir']
+                build_cmd = data['build_cmd']
+                print(f"    {name}: {build_cmd}")
+                result = subprocess.run(build_cmd, shell=True, cwd=dest, capture_output=True, text=True)  # noqa: S602
+                if result.returncode == 0:
+                    print(f"    {name} rebuilt")
+                else:
+                    print(f"    Warning: {name} build failed — {result.stderr[-300:].strip()}")
+
+    # 4. Report npm-package MCPs
+    npm_mcps = {
+        name: data for name, data in manifest.get('mcp_definitions', {}).items()
+        if data.get('type') == 'npm-package'
+        and (not target_names or name in target_names)
+    }
+    if npm_mcps:
+        print(f"\n  npm-package MCPs (auto-pull latest on next invocation via npx):")
+        for name, data in npm_mcps.items():
+            pkg = next((a for a in data.get('args', []) if a.startswith('@') or '/' in a), '')
+            print(f"    {name} — {pkg}")
+
+    # 5. Re-sync all projects so skills are refreshed
+    if not dry_run:
+        print(f"\n  Re-syncing projects...")
+        projects = [p for p in sorted(SRC_DIR.iterdir()) if p.is_dir()] if SRC_DIR.exists() else []
+        synced = 0
+        for project in projects:
+            flux_json = load_flux_json(project)
+            if flux_json and flux_json.get('skills'):
+                skill_registry = {**manifest.get('skill_definitions', {}), **reg.get('skill_definitions', {})}
+                for skill_name in flux_json.get('skills', []):
+                    if skill_name not in skill_registry:
+                        continue
+                    skill_data = skill_registry[skill_name]
+                    source_path = Path(skill_data.get('source_dir', ''))
+                    if not source_path.is_absolute():
+                        source_path = FLUX_ROOT / source_path
+                    dest_path = project / ".claude" / "skills" / skill_name
+                    if source_path.exists():
+                        if dest_path.exists():
+                            shutil.rmtree(dest_path)
+                        shutil.copytree(source_path, dest_path)
+                synced += 1
+                print(f"    {flux_json.get('name', project.name)}")
+
+        if not synced:
+            print("    No projects with skills to re-sync")
+
+    if dry_run:
+        if updated:
+            print(f"\n  {updated} item(s) have updates available\n")
+        else:
+            print(f"\n  Everything is up to date\n")
+    else:
+        print(f"\n  Upgrade complete ({updated} updated)\n")
+
+
+# --- flux run ---
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Dispatch flux run subcommands or execute a task."""
+    sub = getattr(args, 'task_or_sub', None)
+
+    if sub == 'init':
+        _cmd_run_init(args.init_name)
+    elif sub == 'list':
+        _cmd_run_list()
+    elif sub == 'clean':
+        _cmd_run_clean(force=getattr(args, 'force', False))
+    elif sub is not None or getattr(args, 'file', None):
+        _cmd_run_task(args)
+    else:
+        print("flux run: specify a task string, --file run.json, or a subcommand (init/list/clean)")
+        sys.exit(1)
+
+
+def _cmd_run_task(args: argparse.Namespace) -> None:
+    """Execute a task — from inline string or run.json manifest."""
+    from sandbox import (
+        generate_run_id, create_sandbox, write_run_meta, run_agent, load_run_manifest,
+    )
+
+    manifest = load_manifest()
+    run_file = getattr(args, 'file', None)
+    task_or_sub = getattr(args, 'task_or_sub', None)
+
+    if run_file:
+        run_manifest = load_run_manifest(run_file)
+        task = run_manifest.get('task', '')
+        mcps = run_manifest.get('mcps', [])
+        name = run_manifest.get('name')
+        timeout = run_manifest.get('timeout', 300)
+    else:
+        task = task_or_sub
+        mcps = getattr(args, 'mcps', []) or []
+        name = None
+        timeout = None
+
+    if not task:
+        print("❌ No task specified. Provide a task string or a run.json with a 'task' field.")
+        sys.exit(1)
+
+    keep = getattr(args, 'keep', False)
+    no_stream = getattr(args, 'no_stream', False)
+
+    run_id = generate_run_id()
+    SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
+    sandbox_path = create_sandbox(run_id, mcps, manifest)
+    write_run_meta(sandbox_path, run_id, task, mcps, name=name)
+
+    exit_code = run_agent(
+        sandbox_path,
+        task,
+        keep=keep,
+        stream=not no_stream,
+        run_id=run_id,
+        mcps=mcps,
+    )
+    sys.exit(exit_code)
+
+
+def _cmd_run_init(name: str | None = None) -> None:
+    """Scaffold a run.json template in the current directory."""
+    name = name or "my-run"
+    output_path = Path.cwd() / "run.json"
+
+    if output_path.exists():
+        print(f"❌ run.json already exists at {output_path}")
+        sys.exit(1)
+
+    manifest = load_manifest()
+    available_mcps = sorted(manifest.get('mcp_definitions', {}).keys())
+
+    template = {
+        "name": name,
+        "task": "Describe your task here",
+        "mcps": [],
+        "skills": [],
+        "workspace": "scratch",
+        "output": "output.md",
+        "timeout": 300,
+    }
+    output_path.write_text(json.dumps(template, indent=2) + "\n")
+
+    print(f"✅ Created run.json for '{name}'")
+    print(f"   Edit the 'task' field, then run: flux run --file run.json")
+    if available_mcps:
+        print(f"   Available MCPs: {', '.join(available_mcps)}")
+
+
+def _cmd_run_list() -> None:
+    """Show all past/active runs from sandbox/."""
+    from sandbox import list_runs
+    from rich.console import Console
+    from rich.table import Table
+
+    runs = list_runs()
+    console = Console()
+
+    if not runs:
+        console.print("[dim]No runs found in sandbox/[/dim]")
+        return
+
+    table = Table(title="flux run history", show_lines=False)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("MCPs", style="dim")
+    table.add_column("Task", max_width=50, overflow="ellipsis")
+
+    status_colors = {
+        "done":    "[green]done[/green]",
+        "failed":  "[red]failed[/red]",
+        "running": "[yellow]running[/yellow]",
+    }
+
+    for run in runs:
+        status = run.get("status", "?")
+        status_str = status_colors.get(status, status)
+        mcps_str = ", ".join(run.get("mcps", [])) or "—"
+        task = run.get("task", "")
+        name = run.get("name", run.get("id", ""))
+        table.add_row(run.get("id", ""), name, status_str, mcps_str, task)
+
+    console.print(table)
+
+
+def _cmd_run_clean(force: bool = False) -> None:
+    """Remove all sandboxes from sandbox/."""
+    from sandbox import clean_runs
+
+    count = clean_runs(force=force)
+    if count == -1:
+        print("Aborted.")
+    elif count == 0:
+        print("sandbox/ is already empty.")
+    else:
+        print(f"✅ Removed {count} sandbox(es) from sandbox/")
+
+
+def cmd_version(args: argparse.Namespace) -> None:
+    """flux version [--check] — show installed version and optionally check for updates."""
+    from flux_cli.lib.version import format_version_output
+
+    check = getattr(args, "check", False)
+    print(format_version_output(check=check))
+
+
+# --- MAIN ---
+
+def main() -> None:
+    """Parse CLI arguments and dispatch to the appropriate command handler."""
+    parser = argparse.ArgumentParser(description="Flux OS — Agentic AI control plane")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # flux search <query>
+    p = subparsers.add_parser("search", help="Search the official MCP Registry (registry.modelcontextprotocol.io)")
+    p.add_argument("query", help="Search query (e.g. 'github', 'slack', 'filesystem')")
+    p.add_argument("--limit", type=int, default=20, metavar="N", help="Max results (default: 20)")
+    p.add_argument("--add", action="store_true", help="Interactively add a result to your marketplace")
+    p.set_defaults(func=cmd_search)
+
+    # flux list
+    p = subparsers.add_parser("list", help="List available MCPs and skills")
+    p.add_argument("--json", dest="json_output", action="store_true", help="Output as JSON")
+    p.add_argument("--type", choices=["mcp", "skill"], help="Filter by type")
+    p.set_defaults(func=cmd_list)
+
+    # flux init [name]
+    p = subparsers.add_parser("init", help="Scaffold a new project (current dir or named subdir)")
+    p.add_argument("name", nargs="?", default=None, help="Project name (omit to init current directory)")
+    p.set_defaults(func=cmd_init)
+
+    # flux install <name> [name ...]
+    p = subparsers.add_parser("install", help="Add MCPs/skills to current project and sync")
+    p.add_argument("names", nargs="+", help="Names of MCPs or skills to install")
+    p.set_defaults(func=cmd_install)
+
+    # flux uninstall <name> [name ...]
+    p = subparsers.add_parser("uninstall", help="Remove MCPs/skills from current project and sync")
+    p.add_argument("names", nargs="+", help="Names of MCPs or skills to uninstall")
+    p.set_defaults(func=cmd_uninstall)
+
+    # flux sync
+    p = subparsers.add_parser("sync", help="Sync projects: read flux.json, generate .mcp.json")
+    p.add_argument("--all", action="store_true", help="Sync all tracked projects from ~/.flux/projects.json")
+    p.set_defaults(func=cmd_sync)
+
+    # flux add mcp/skill
+    p = subparsers.add_parser("add", help="Register a new MCP or skill")
+    p.add_argument("entry_type", choices=["mcp", "skill"], help="Type to register")
+    p.add_argument("name", help="Name for the registry entry (lowercase alphanumeric + hyphens, 2-50 chars)")
+    p.add_argument("--uvx",       help="PyPI package to run via uvx (e.g. alpaca-mcp-server)")
+    p.add_argument("--npx",       help="npm package (e.g. @modelcontextprotocol/server-memory)")
+    p.add_argument("--github",    help="GitHub repo (e.g. user/repo) — clones into ~/.flux/mcps/")
+    p.add_argument("--local",     help="Local directory path")
+    p.add_argument("--command",   help="Command to run the MCP (for --github/--local)")
+    p.add_argument("--args",      help="Args for the command, space-separated")
+    p.add_argument("--tags",      help="Comma-separated tags")
+    p.add_argument("--keychain",  help="Comma-separated env var names for keychain auth")
+    p.add_argument("--build-cmd", dest="build_cmd", help="Build command to run after clone (e.g. 'npm install && npm run build')")
+    p.add_argument("--setup-cmd", dest="setup_cmd", help="Setup command to run after registration")
+    p.set_defaults(func=cmd_add)
+
+    # flux upgrade
+    p = subparsers.add_parser("upgrade", help="Update cloned repos and marketplace submodules")
+    p.add_argument("names", nargs="*", help="Specific names to upgrade (default: all)")
+    p.add_argument("--dry-run", action="store_true", help="Show what would be updated without making changes")
+    p.set_defaults(func=cmd_upgrade)
+
+    # flux remove <name>
+    p = subparsers.add_parser("remove", help="Unregister an MCP or skill from marketplace")
+    p.add_argument("name", help="Name to remove")
+    p.set_defaults(func=cmd_remove)
+
+    # flux status
+    p = subparsers.add_parser("status", help="Show MCP server health")
+    p.add_argument("--all", action="store_true", help="Fleet view: all projects in src/")
+    p.set_defaults(func=cmd_status)
+
+    # flux doctor
+    subparsers.add_parser("doctor", help="Check and auto-fix Flux environment health").set_defaults(func=cmd_doctor)
+
+    # flux secret
+    p = subparsers.add_parser("secret", help="Manage MCP secrets (keychain, secret-service, age)")
+    secret_sub = p.add_subparsers(dest="subcmd", required=True)
+    p.set_defaults(func=cmd_secret)
+
+    ps = secret_sub.add_parser("set", help="Store a secret (prompts if value omitted)")
+    ps.add_argument("mcp", help="MCP name (e.g. monica)")
+    ps.add_argument("key", help="Env var name (e.g. MONICA_API_TOKEN)")
+    ps.add_argument("value", nargs="?", help="Secret value (omit to be prompted securely)")
+
+    ps = secret_sub.add_parser("get", help="Retrieve a secret from Keychain")
+    ps.add_argument("mcp", help="MCP name")
+    ps.add_argument("key", help="Env var name")
+
+    ps = secret_sub.add_parser("list", help="List stored secrets")
+    ps.add_argument("mcp", nargs="?", help="Filter by MCP name (optional)")
+
+    ps = secret_sub.add_parser("delete", help="Remove a secret from Keychain")
+    ps.add_argument("mcp", help="MCP name")
+    ps.add_argument("key", help="Env var name")
+
+    # flux setup [mcp]
+    p = subparsers.add_parser("setup", help="Initialise ~/.flux/ (or run setup_cmd for a specific MCP)")
+    p.add_argument("name", nargs="?", default=None, help="MCP name (e.g. alpaca-mcp) — omit to run full setup")
+    p.set_defaults(func=cmd_setup)
+
+    # flux run
+    p = subparsers.add_parser("run", help="Run an agent in an isolated sandbox")
+    p.add_argument("task_or_sub", nargs="?", metavar="task|init|list|clean",
+                   help="Task string to run, or subcommand: init / list / clean")
+    p.add_argument("init_name", nargs="?", metavar="name",
+                   help="Name argument for 'flux run init <name>'")
+    p.add_argument("--mcps", nargs="*", default=[], metavar="mcp",
+                   help="MCPs to enable for this run (e.g. --mcps memory wikijs-mcp)")
+    p.add_argument("--keep", action="store_true",
+                   help="Keep sandbox directory after run completes")
+    p.add_argument("--no-stream", dest="no_stream", action="store_true",
+                   help="Collect output instead of streaming it live")
+    p.add_argument("--file", "-f", metavar="run.json",
+                   help="Load task and config from a run.json manifest file")
+    p.add_argument("--force", action="store_true",
+                   help="Skip confirmation prompt for 'flux run clean'")
+    p.set_defaults(func=cmd_run)
+
+    # flux version
+    p = subparsers.add_parser("version", help="Show flux-cli version and check for updates")
+    p.add_argument("--check", action="store_true", help="Check PyPI for a newer version")
+    p.set_defaults(func=cmd_version)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,9 @@
+{
+  "name": "test-run",
+  "task": "List all available tools",
+  "mcps": ["memory"],
+  "skills": [],
+  "workspace": "scratch",
+  "output": "output.md",
+  "timeout": 60
+}
