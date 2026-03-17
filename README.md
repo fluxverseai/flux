@@ -27,7 +27,6 @@ Without Flux, managing MCPs at scale looks like this:
 | **Skills are unmanaged** | 60,000+ Claude Code skills exist as files you manually copy between machines. No versioning. No scoping. No package management. |
 
 **Scoping isn't just organization — it's a quality lever.** An agent with 5 relevant tools outperforms one drowning in 50 irrelevant ones. Less noise in the context window means better outputs, fewer hallucinated tool calls, and tighter security.
-
 ## Install
 
 ```bash
@@ -171,7 +170,6 @@ In an ecosystem where [48% of MCP servers recommend plaintext credential storage
 | MCPM | Profile-based — no project-level manifest, no keystore secrets, no sandboxed execution |
 
 Flux is the full lifecycle: **curate → scope → secure → execute → monitor.**
-
 ## Development
 
 ```bash
