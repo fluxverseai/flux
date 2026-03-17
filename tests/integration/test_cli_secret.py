@@ -96,6 +96,10 @@ class TestFluxSecretSubcommands:
         result = run_flux("secret", "get", "mymcp", "MISSING_KEY", env=env)
         assert result.returncode != 0
 
+    @pytest.mark.skipif(
+        not os.path.exists("/usr/bin/security") and os.uname().sysname != "Darwin",
+        reason="macOS Keychain tests require macOS or a fake security binary",
+    )
     def test_set_calls_security(self, flux_env, tmp_path):
         env, root = flux_env
         # Create a fake security binary that records calls
