@@ -1,8 +1,9 @@
 """Unit tests for lib/manifest.py"""
 import json
 
-import manifest as m
 import pytest
+
+import manifest as m
 
 # ---------------------------------------------------------------------------
 # Legacy marketplace manifest tests

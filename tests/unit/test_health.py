@@ -4,8 +4,9 @@ import shutil
 import subprocess
 from unittest.mock import MagicMock
 
-import health as h
 import pytest
+
+import health as h
 
 
 def _make_proc(stdout_lines: list[dict], returncode: int = 0):

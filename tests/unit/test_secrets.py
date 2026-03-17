@@ -1,9 +1,10 @@
 """Unit tests for lib/secrets.py"""
 import json
-import secrets as s
 from unittest.mock import MagicMock
 
 import pytest
+
+import secrets as s
 
 
 class TestKeychainServiceName:
