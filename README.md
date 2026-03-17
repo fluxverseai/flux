@@ -3,7 +3,7 @@
 **Your AI agents have access to 10,000+ MCP servers. They should only see five.**
 
 [![CI](https://github.com/fluxverseai/flux/actions/workflows/ci.yml/badge.svg)](https://github.com/fluxverseai/flux/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/flux-cli)](https://pypi.org/project/flux-cli/)
+[![PyPI](https://img.shields.io/pypi/v/fluxverse-cli)](https://pypi.org/project/fluxverse-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
@@ -30,7 +30,7 @@ Without Flux, managing MCPs at scale looks like this:
 ## Install
 
 ```bash
-uv tool install flux-cli
+uv tool install fluxverse-cli
 flux setup
 ```
 
