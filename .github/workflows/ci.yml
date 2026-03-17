@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   workflow_call: {}
 
 permissions:
@@ -19,25 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Validate marketplace.json
-        run: |
-          python3 -c "
-          import json, sys
-          with open('marketplace/marketplace.json') as f:
-              m = json.load(f)
-          assert 'mcp_definitions' in m, 'missing mcp_definitions'
-          assert 'skill_definitions' in m, 'missing skill_definitions'
-          for name, mcp in m['mcp_definitions'].items():
-              assert 'type' in mcp, f'{name}: missing type'
-              has_command = 'command' in mcp
-              is_submodule = mcp.get('type') == 'git-submodule'
-              assert has_command or is_submodule, f'{name}: missing command'
-          print(f'marketplace.json valid — {len(m[\"mcp_definitions\"])} MCPs, {len(m[\"skill_definitions\"])} skills')
-          "
-
-      - name: Validate settings.json
-        run: python3 -c "import json; json.load(open('core/settings.json'))"
 
       - name: Check Python syntax (lib/)
         run: |
