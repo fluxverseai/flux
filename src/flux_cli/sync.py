@@ -1,8 +1,4 @@
-"""Sync engine — read flux.json + registry, generate .mcp.json and launcher scripts.
-
-This module provides the core sync logic used by ``flux sync`` and called
-automatically after ``flux install`` / ``flux uninstall``.
-"""
+"""Sync engine — read flux.json + registry, generate .mcp.json and launcher scripts."""
 
 from __future__ import annotations
 
@@ -14,9 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from flux_cli.lib.paths import flux_home, launchers_dir, registry_path, skills_dir
+from flux_cli.paths import flux_home, launchers_dir, registry_path, skills_dir
 
-# Safe patterns for values embedded in shell scripts
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 _SAFE_ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -40,13 +35,7 @@ def _load_registry_for_sync(reg_path: Path | None = None) -> dict[str, Any]:
 
 
 def _secret_lookup_command(mcp_name: str, var: str) -> str:
-    """Return a platform-specific shell command to fetch a secret at runtime.
-
-    - macOS: ``security find-generic-password``
-    - Linux: ``secret-tool lookup`` (freedesktop Secret Service)
-
-    Raises ValueError if mcp_name or var contain unsafe characters.
-    """
+    """Return a platform-specific shell command to fetch a secret at runtime."""
     if not _SAFE_NAME_RE.match(mcp_name):
         msg = f"Unsafe MCP name for shell embedding: {mcp_name!r}"
         raise ValueError(msg)
@@ -58,7 +47,6 @@ def _secret_lookup_command(mcp_name: str, var: str) -> str:
         return (
             f"$(security find-generic-password -s flux.{mcp_name} -a {var} -w 2>/dev/null)"
         )
-    # Linux default: secret-tool (freedesktop Secret Service)
     return (
         f"$(secret-tool lookup service flux.{mcp_name} username {var} 2>/dev/null)"
     )
@@ -70,13 +58,7 @@ def generate_launcher(
     *,
     launcher_base: Path | None = None,
 ) -> Path | None:
-    """Generate a platform-aware launcher script for an authed MCP.
-
-    The script fetches secrets via keystore lookup commands at runtime — it
-    never embeds secret values directly.
-
-    Returns the launcher path, or ``None`` if no auth env vars are declared.
-    """
+    """Generate a platform-aware launcher script for an authed MCP."""
     env_vars = mcp_data.get("auth", {}).get("env_vars", [])
     if not env_vars:
         return None
@@ -87,7 +69,6 @@ def generate_launcher(
     command = mcp_data.get("command", "")
     args = list(mcp_data.get("args", []))
 
-    # Resolve {source_dir} placeholders using $SCRIPT_DIR-relative paths
     if mcp_data.get("source_dir"):
         import os
 
@@ -113,11 +94,10 @@ SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 {export_lines}
 exec {exec_line}
 """
-    # Use Path.name to prevent path traversal in launcher filename
     safe_name = Path(mcp_name).name
     launcher_path = launcher_base / f"{safe_name}.sh"
     launcher_path.write_text(script)
-    launcher_path.chmod(0o700)  # Owner-only: scripts handle credential lookups
+    launcher_path.chmod(0o700)
     return launcher_path
 
 
@@ -146,7 +126,6 @@ def _build_server_entry(
     if extra_args:
         server["args"] = server.get("args", []) + extra_args
 
-    # Resolve {source_dir} placeholder
     if mcp_data.get("source_dir"):
         abs_source = mcp_data["source_dir"]
         if not Path(abs_source).is_absolute():
@@ -164,10 +143,7 @@ def sync_project(
     *,
     launcher_base: Path | None = None,
 ) -> tuple[bool, list[str]]:
-    """Sync a single project: generate .mcp.json, copy skills.
-
-    Returns ``(success, issues)`` where *issues* is a list of error strings.
-    """
+    """Sync a single project: generate .mcp.json, copy skills."""
     flux_json_path = project_dir / "flux.json"
     if not flux_json_path.exists():
         return False, ["No flux.json found"]
@@ -198,7 +174,6 @@ def sync_project(
             mcp_name, mcp_defs[mcp_name], extra_args or None, launcher_base=launcher_base
         )
 
-    # Write .mcp.json
     mcp_file = project_dir / ".mcp.json"
     new_config = {"mcpServers": mcp_servers}
     _atomic_json_write(mcp_file, new_config)
@@ -213,7 +188,6 @@ def sync_project(
         source_dir_str = skill_data.get("source_dir", "")
         source_path = Path(source_dir_str)
         if not source_path.is_absolute():
-            # Try from skills_dir first, then flux home parent
             candidate = skills_dir() / skill_name
             if candidate.exists():
                 source_path = candidate
@@ -222,14 +196,12 @@ def sync_project(
             else:
                 source_path = skills_dir() / skill_name
 
-        # Use Path.name to prevent path traversal in skill name
         safe_skill = Path(skill_name).name
         skills_parent = project_dir / ".claude" / "skills"
         dest_path = skills_parent / safe_skill
         if source_path.exists():
             import shutil
 
-            # Verify dest is actually under the expected parent
             if not dest_path.resolve().is_relative_to(skills_parent.resolve()):
                 issues.append(f"Skill '{skill_name}' resolves outside skills directory")
                 continue

@@ -1,7 +1,7 @@
 """Unit tests for lib/mcp_config.py"""
 import stat
 
-import mcp_config as mc
+import flux_cli.mcp_config as mc
 
 # ---------------------------------------------------------------------------
 # generate_launcher

@@ -1,4 +1,4 @@
-"""Unit tests for lib/health.py — all subprocess calls mocked."""
+"""Unit tests for flux_cli.health — all subprocess calls mocked."""
 import json
 import shutil
 import subprocess
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import health as h
+import flux_cli.health as h
 
 
 def _make_proc(stdout_lines: list[dict], returncode: int = 0):
@@ -39,7 +39,7 @@ class TestProbeMcpServer:
     # --- command not found ---
 
     def test_command_not_found(self, mocker):
-        mocker.patch("health.shutil.which", return_value=None)
+        mocker.patch("flux_cli.health.shutil.which", return_value=None)
         status, reason = h.probe_mcp_server({"command": "nonexistent", "args": []})
         assert status == "failed"
         assert "nonexistent" in reason
@@ -47,15 +47,15 @@ class TestProbeMcpServer:
     # --- http url shortcircuit ---
 
     def test_http_url_returns_needs_auth(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/curl")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/curl")
         status, _ = h.probe_mcp_server({"command": "http://example.com/mcp", "args": []})
         assert "authentication" in status
 
     # --- auth check_cmd ---
 
     def test_auth_check_cmd_failure_returns_auth_required(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/cmd")
-        mocker.patch("health.subprocess.run", return_value=MagicMock(returncode=1))
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/cmd")
+        mocker.patch("flux_cli.health.subprocess.run", return_value=MagicMock(returncode=1))
         config = {
             "command": "cmd",
             "args": [],
@@ -69,9 +69,9 @@ class TestProbeMcpServer:
         assert "gh auth login" in reason
 
     def test_auth_check_cmd_timeout_returns_auth_required(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/cmd")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/cmd")
         mocker.patch(
-            "health.subprocess.run",
+            "flux_cli.health.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=5),
         )
         config = {
@@ -85,16 +85,16 @@ class TestProbeMcpServer:
     # --- successful handshake ---
 
     def test_connected_on_successful_handshake(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_popen.return_value = _make_proc([INIT_RESPONSE, TOOLS_LIST_RESPONSE])
         status, detail = h.probe_mcp_server({"command": "npx", "args": ["-y", "pkg"]})
         assert status == "connected"
         assert "test-server" in detail
 
     def test_running_when_no_tools_list_response(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_popen.return_value = _make_proc([INIT_RESPONSE])  # no tools/list response
         status, _ = h.probe_mcp_server({"command": "npx", "args": []})
         assert status == "running"
@@ -102,8 +102,8 @@ class TestProbeMcpServer:
     # --- error responses ---
 
     def test_auth_error_in_tools_list(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         tools_auth_error = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -115,8 +115,8 @@ class TestProbeMcpServer:
         assert "token" in reason.lower()
 
     def test_generic_error_in_tools_list(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         tools_error = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -129,8 +129,8 @@ class TestProbeMcpServer:
     # --- timeout + exceptions ---
 
     def test_process_timeout_returns_timeout(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_proc = MagicMock()
         mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="npx", timeout=10)
         mock_popen.return_value = mock_proc
@@ -139,16 +139,16 @@ class TestProbeMcpServer:
         mock_proc.kill.assert_called_once()
 
     def test_popen_exception_returns_failed(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mocker.patch("health.subprocess.Popen", side_effect=OSError("no such file"))
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mocker.patch("flux_cli.health.subprocess.Popen", side_effect=OSError("no such file"))
         status, reason = h.probe_mcp_server({"command": "npx", "args": []})
         assert status == "failed"
 
     # --- env overrides ---
 
     def test_env_overrides_passed_to_subprocess(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_popen.return_value = _make_proc([INIT_RESPONSE, TOOLS_LIST_RESPONSE])
         h.probe_mcp_server({"command": "npx", "args": [], "env": {"MY_VAR": "myval"}})
         call_kwargs = mock_popen.call_args[1]
@@ -157,8 +157,8 @@ class TestProbeMcpServer:
     # --- non-JSON lines ---
 
     def test_non_json_lines_skipped(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mixed_stdout = (
             b"Starting server...\n"
             + json.dumps(INIT_RESPONSE).encode() + b"\n"

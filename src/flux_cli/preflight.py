@@ -1,12 +1,6 @@
 """Pre-flight validation for sandbox creation.
 
-Runs 6 checks that ALL must pass before a sandbox is created:
-1. MCP exists in registry
-2. MCP source available on disk (for cloned types)
-3. Auth satisfied (all env_vars have secrets in keystore)
-4. Auth pre-flight passes (check_cmd succeeds)
-5. Skill exists in registry and on disk
-6. Build artifacts present (for MCPs with build_cmd)
+Runs 6 checks that ALL must pass before a sandbox is created.
 """
 
 from __future__ import annotations
@@ -16,10 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from flux_cli.lib.paths import flux_home, registry_path, skills_dir
-from flux_cli.lib.secrets import load_secrets_index
+from flux_cli.paths import flux_home, registry_path, skills_dir
+from flux_cli.secrets import load_secrets_index
 
-# Types that require a cloned source directory on disk
 _CLONED_TYPES = {"github", "git-submodule", "local"}
 
 
@@ -36,22 +29,7 @@ def run_preflight(
     skills: list[str],
     registry: dict[str, Any] | None = None,
 ) -> PreflightResult:
-    """Run all pre-flight checks and return the result.
-
-    Parameters
-    ----------
-    mcps : list[str]
-        MCP names required for the run.
-    skills : list[str]
-        Skill names required for the run.
-    registry : dict, optional
-        Pre-loaded registry dict.  If ``None``, loaded from disk.
-
-    Returns
-    -------
-    PreflightResult
-        ``.ok`` is True only when every check passes.
-    """
+    """Run all pre-flight checks and return the result."""
     if registry is None:
         registry = _load_registry()
 
@@ -79,12 +57,7 @@ def run_preflight(
 # ---------------------------------------------------------------------------
 
 
-def _check_mcp_exists(
-    name: str,
-    mcp_defs: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 1: MCP exists in registry."""
+def _check_mcp_exists(name: str, mcp_defs: dict[str, Any], errors: list[str]) -> None:
     if name not in mcp_defs:
         available = ", ".join(sorted(mcp_defs.keys())) or "(none)"
         errors.append(
@@ -94,12 +67,7 @@ def _check_mcp_exists(
         )
 
 
-def _check_mcp_source(
-    name: str,
-    mcp_data: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 2: MCP source directory present on disk (for cloned types)."""
+def _check_mcp_source(name: str, mcp_data: dict[str, Any], errors: list[str]) -> None:
     mcp_type = mcp_data.get("type", "")
     if mcp_type not in _CLONED_TYPES:
         return
@@ -119,12 +87,7 @@ def _check_mcp_source(
         )
 
 
-def _check_auth_secrets(
-    name: str,
-    mcp_data: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 3: All required env_vars have secrets in the keystore."""
+def _check_auth_secrets(name: str, mcp_data: dict[str, Any], errors: list[str]) -> None:
     auth = mcp_data.get("auth", {})
     env_vars = auth.get("env_vars", [])
     if not env_vars:
@@ -141,23 +104,14 @@ def _check_auth_secrets(
             )
 
 
-def _check_auth_preflight(
-    name: str,
-    mcp_data: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 4: Auth check_cmd succeeds (e.g. ``gh auth status``)."""
+def _check_auth_preflight(name: str, mcp_data: dict[str, Any], errors: list[str]) -> None:
     auth = mcp_data.get("auth", {})
     check_cmd = auth.get("check_cmd")
     if not check_cmd:
         return
 
     try:
-        result = subprocess.run(  # noqa: S603
-            check_cmd,
-            capture_output=True,
-            timeout=10,
-        )
+        result = subprocess.run(check_cmd, capture_output=True, timeout=10)  # noqa: S603
         if result.returncode != 0:
             fix_desc = auth.get("fix_description", f"Run: {' '.join(auth.get('fix_cmd', []))}")
             errors.append(
@@ -171,17 +125,10 @@ def _check_auth_preflight(
             f"Fix: {fix_desc}"
         )
     except subprocess.TimeoutExpired:
-        errors.append(
-            f"MCP '{name}' auth check timed out after 10s."
-        )
+        errors.append(f"MCP '{name}' auth check timed out after 10s.")
 
 
-def _check_skill(
-    name: str,
-    skill_defs: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 5: Skill exists in registry and source is on disk."""
+def _check_skill(name: str, skill_defs: dict[str, Any], errors: list[str]) -> None:
     if name not in skill_defs:
         available = ", ".join(sorted(skill_defs.keys())) or "(none)"
         errors.append(
@@ -196,7 +143,6 @@ def _check_skill(
     if source_dir:
         source_path = Path(source_dir)
         if not source_path.is_absolute():
-            # Try skills_dir first, then flux_home parent
             candidate = skills_dir() / name
             if not candidate.exists():
                 candidate = flux_home().parent / source_dir
@@ -208,12 +154,7 @@ def _check_skill(
             )
 
 
-def _check_build_artifacts(
-    name: str,
-    mcp_data: dict[str, Any],
-    errors: list[str],
-) -> None:
-    """Check 6: Build artifacts present (for MCPs with build_cmd)."""
+def _check_build_artifacts(name: str, mcp_data: dict[str, Any], errors: list[str]) -> None:
     build_cmd = mcp_data.get("build_cmd")
     if not build_cmd:
         return
@@ -226,7 +167,6 @@ def _check_build_artifacts(
     if not source_path.is_absolute():
         source_path = flux_home().parent / source_dir
 
-    # Check for common build output directories
     build_indicators = ["node_modules", "dist", "build", ".build", "__pycache__"]
     has_artifacts = any((source_path / ind).exists() for ind in build_indicators)
 
@@ -243,7 +183,6 @@ def _check_build_artifacts(
 
 
 def _load_registry() -> dict[str, Any]:
-    """Load the registry from disk."""
     import json
 
     path = registry_path()

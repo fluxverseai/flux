@@ -1,18 +1,12 @@
 """Shared fixtures for all flux tests."""
 import json
 import shutil
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-# Ensure lib/ is on the path for direct imports in unit tests
-FLUX_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(FLUX_ROOT / "lib"))
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-FLUX_BIN = FLUX_ROOT / "bin" / "flux"
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +65,14 @@ def project_dir(flux_root, minimal_manifest):
 @pytest.fixture
 def patch_manifest_paths(monkeypatch, flux_root):
     """Redirect manifest module constants to the temp flux_root."""
-    import manifest as m
-    monkeypatch.setattr(m, "FLUX_ROOT", flux_root)
-    monkeypatch.setattr(m, "MARKETPLACE_DIR", flux_root / "marketplace")
-    monkeypatch.setattr(m, "MANIFEST_PATH", flux_root / "marketplace" / "marketplace.json")
+    import flux_cli.manifest as m
+    monkeypatch.setattr(m, "REGISTRY_VERSION", "1.0.0")
 
 
 @pytest.fixture
 def patch_mcp_config_paths(monkeypatch, flux_root):
     """Redirect mcp_config module constants to the temp flux_root."""
-    import mcp_config as mc
+    import flux_cli.mcp_config as mc
     monkeypatch.setattr(mc, "FLUX_ROOT", flux_root)
     monkeypatch.setattr(mc, "MARKETPLACE_DIR", flux_root / "marketplace")
     monkeypatch.setattr(mc, "MCP_DIR", flux_root / "marketplace" / "mcps")
@@ -89,19 +81,14 @@ def patch_mcp_config_paths(monkeypatch, flux_root):
 
 @pytest.fixture
 def patch_sandbox_paths(monkeypatch, flux_root):
-    """Redirect sandbox module constants to the temp flux_root."""
-    import sandbox as sb
-    monkeypatch.setattr(sb, "FLUX_ROOT", flux_root)
-    monkeypatch.setattr(sb, "SANDBOX_DIR", flux_root / "sandbox")
+    """Redirect sandbox module paths to the temp flux_root via FLUX_TEST_ROOT."""
+    monkeypatch.setenv("FLUX_TEST_ROOT", str(flux_root))
 
 
 @pytest.fixture
 def patch_secrets_paths(monkeypatch, tmp_path):
-    """Redirect secrets module FLUX_HOME / SECRETS_INDEX to a temp dir."""
-    import secrets as s
-    fake_home = tmp_path / ".flux"
-    monkeypatch.setattr(s, "FLUX_HOME", fake_home)
-    monkeypatch.setattr(s, "SECRETS_INDEX", fake_home / "secrets.json")
+    """Redirect secrets module paths to a temp dir."""
+    monkeypatch.setenv("FLUX_TEST_ROOT", str(tmp_path))
 
 
 # ---------------------------------------------------------------------------
@@ -151,5 +138,5 @@ def mock_keychain(mocker):
 
         return result
 
-    mocker.patch("secrets.subprocess.run", side_effect=fake_run)
+    mocker.patch("flux_cli.secrets.subprocess.run", side_effect=fake_run)
     return store

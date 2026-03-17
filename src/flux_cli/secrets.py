@@ -19,7 +19,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from flux_cli.lib.paths import flux_home, secrets_path
+from flux_cli.paths import flux_home, secrets_path
 
 # ---------------------------------------------------------------------------
 # Secrets index (tracks key names per MCP — not values)
@@ -77,19 +77,15 @@ class SecretsBackend(Protocol):
     """Protocol that all secrets backends must implement."""
 
     def set(self, mcp_name: str, key: str, value: str) -> None:  # noqa: A003
-        """Store a secret value."""
         ...
 
     def get(self, mcp_name: str, key: str) -> str | None:  # noqa: A003
-        """Retrieve a secret value, or None if not found."""
         ...
 
     def delete(self, mcp_name: str, key: str) -> None:
-        """Delete a secret."""
         ...
 
     def list_keys(self, mcp_name: str | None = None) -> dict[str, list[str]]:
-        """Return {mcp: [keys]} for one or all MCPs."""
         ...
 
 
@@ -106,7 +102,6 @@ class MacOSKeychainBackend:
 
     def set(self, mcp_name: str, key: str, value: str) -> None:  # noqa: A003
         service = self._service(mcp_name)
-        # Use stdin (-w with no arg) to avoid exposing secret on command line (visible via ps)
         cmd = ["security", "add-generic-password", "-s", service, "-a", key, "-w", "-U"]  # noqa: S607
         result = subprocess.run(cmd, input=value.encode(), capture_output=True)  # noqa: S603
         if result.returncode != 0:
@@ -140,17 +135,13 @@ class MacOSKeychainBackend:
 # ---------------------------------------------------------------------------
 
 class LinuxSecretServiceBackend:
-    """Secrets backend using freedesktop.org Secret Service (via secretstorage).
-
-    Falls back to AgeEncryptedBackend if D-Bus is unavailable.
-    """
+    """Secrets backend using freedesktop.org Secret Service (via secretstorage)."""
 
     def __init__(self) -> None:
         self._connection: Any = None
         self._available: bool | None = None
 
     def _ensure_connection(self) -> Any:
-        """Lazily connect to D-Bus. Returns the connection or None."""
         if self._available is False:
             return None
         if self._connection is not None:
@@ -218,11 +209,7 @@ class LinuxSecretServiceBackend:
 # ---------------------------------------------------------------------------
 
 class AgeEncryptedBackend:
-    """Secrets backend using age-encrypted JSON file.
-
-    Identity key: ~/.flux/identity  (permissions 0o600)
-    Secrets file: ~/.flux/secrets.age
-    """
+    """Secrets backend using age-encrypted JSON file."""
 
     def _identity_path(self) -> Path:
         return flux_home() / "identity"
@@ -231,7 +218,6 @@ class AgeEncryptedBackend:
         return flux_home() / "secrets.age"
 
     def _ensure_identity(self) -> Path:
-        """Create an age identity key if one does not exist."""
         id_path = self._identity_path()
         if id_path.exists():
             return id_path
@@ -251,18 +237,15 @@ class AgeEncryptedBackend:
         return id_path
 
     def _recipient(self) -> str:
-        """Extract the public key (recipient) from the identity file."""
         id_path = self._ensure_identity()
         for line in id_path.read_text().splitlines():
             if line.startswith("# public key:"):
                 return line.split(":", 1)[1].strip()
-        # Fallback: derive from identity
         cmd = ["age-keygen", "-y", str(id_path)]  # noqa: S607
         result = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
         return result.stdout.strip()
 
     def _load_store(self) -> dict[str, dict[str, str]]:
-        """Decrypt and load the secrets store. Returns {} if file missing."""
         age_path = self._secrets_age_path()
         if not age_path.exists():
             return {}
@@ -275,7 +258,6 @@ class AgeEncryptedBackend:
         return json.loads(result.stdout)
 
     def _save_store(self, store: dict[str, dict[str, str]]) -> None:
-        """Encrypt and atomically write the secrets store (temp file + rename)."""
         age_path = self._secrets_age_path()
         age_path.parent.mkdir(parents=True, exist_ok=True)
         recipient = self._recipient()
@@ -334,16 +316,9 @@ _BACKENDS: dict[str, type] = {
 
 
 def get_backend(config: dict[str, Any] | None = None) -> SecretsBackend:
-    """Return the appropriate SecretsBackend based on configuration.
-
-    Parameters
-    ----------
-    config : dict, optional
-        A loaded config dict (from ``load_config()``).  If omitted, the
-        backend is chosen via platform detection.
-    """
+    """Return the appropriate SecretsBackend based on configuration."""
     if config is None:
-        from flux_cli.lib.config import load_config
+        from flux_cli.config import load_config
         config = load_config()
 
     name = config.get("secrets", {}).get("backend", "keychain")

@@ -1,37 +1,37 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
+# Gitignore for Flux - Agentic AI OS
+# Ignores ephemeral and generated content
 
-# Virtual environments
-.venv/
-venv/
+# Generated/ephemeral directories
+/sandbox
+/memory
 
-# IDE
-.idea/
-.vscode/
+# Old src/ user projects (now tracked in ~/.flux/)
+/src/test-azure-mcp
+
+# Circular symlink created by Claude Code when run inside core/ (~/.claude)
+/core/.claude
+
+# IDE and OS
+.DS_Store
 *.swp
 *.swo
+*~
+.vscode/
+.idea/
+*.log
 
-# Test/coverage
-.pytest_cache/
-coverage.xml
-htmlcov/
-.coverage
+# Dependencies
+node_modules/
+**/__pycache__/
+*.pyc
+**/.venv/
+**/venv/
 
-# Flux runtime (generated)
-.mcp.json
-sandbox/
+# Build artifacts
+dist/
+build/
+*.egg-info/
+src/*.egg-info/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Secrets (never commit)
-.env
-*.age
-identity
+# Auto-generated flux launchers
+/marketplace/mcps/launchers/*.sh

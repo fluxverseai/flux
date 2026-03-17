@@ -1,53 +1,11 @@
-"""Unit tests for lib/manifest.py"""
+"""Unit tests for flux_cli.manifest — registry and flux.json I/O."""
 import json
 
-import pytest
-
-import manifest as m
+import flux_cli.manifest as m
 
 # ---------------------------------------------------------------------------
-# Legacy marketplace manifest tests
+# flux.json tests
 # ---------------------------------------------------------------------------
-
-
-class TestLoadManifest:
-    def test_returns_dict_with_expected_keys(self, patch_manifest_paths, flux_root):
-        result = m.load_manifest()
-        assert "mcp_definitions" in result
-        assert "skill_definitions" in result
-
-    def test_contains_fixture_mcps(self, patch_manifest_paths):
-        result = m.load_manifest()
-        assert "memory" in result["mcp_definitions"]
-        assert "wikijs-mcp" in result["mcp_definitions"]
-
-    def test_missing_file_exits(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(m, "MANIFEST_PATH", tmp_path / "nonexistent.json")
-        with pytest.raises(SystemExit) as exc:
-            m.load_manifest()
-        assert exc.value.code == 1
-
-    def test_invalid_json_raises(self, monkeypatch, tmp_path):
-        bad = tmp_path / "bad.json"
-        bad.write_text("{ not valid json }")
-        monkeypatch.setattr(m, "MANIFEST_PATH", bad)
-        with pytest.raises(json.JSONDecodeError):
-            m.load_manifest()
-
-
-class TestSaveManifest:
-    def test_roundtrip(self, patch_manifest_paths, flux_root, capsys):
-        original = m.load_manifest()
-        original["mcp_definitions"]["new-mcp"] = {"type": "npm-package", "command": "npx"}
-        m.save_manifest(original)
-        reloaded = m.load_manifest()
-        assert "new-mcp" in reloaded["mcp_definitions"]
-
-    def test_pretty_prints(self, patch_manifest_paths, flux_root):
-        data = {"mcp_definitions": {}, "skill_definitions": {}}
-        m.save_manifest(data)
-        raw = (flux_root / "marketplace" / "marketplace.json").read_text()
-        assert "  " in raw  # indent=2
 
 
 class TestLoadFluxJson:
@@ -104,7 +62,6 @@ class TestLoadRegistry:
         assert result["version"] == "1.0.0"
         assert result["mcp_definitions"] == {}
         assert result["skill_definitions"] == {}
-        # File should now exist on disk
         assert reg_path.exists()
 
     def test_load_registry_creates_parent_dirs(self, tmp_path):
@@ -123,11 +80,9 @@ class TestSaveRegistry:
             "skill_definitions": {},
         }
         m.save_registry(data, path=reg_path)
-        # File should be written with no temp files left over
         assert reg_path.exists()
         contents = json.loads(reg_path.read_text())
         assert contents["mcp_definitions"]["test-mcp"]["type"] == "uvx-package"
-        # No .tmp files should remain
         tmp_files = list(tmp_path.glob("*.tmp"))
         assert tmp_files == []
 

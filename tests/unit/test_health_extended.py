@@ -3,7 +3,7 @@ import json
 import subprocess
 from unittest.mock import MagicMock
 
-import health as h
+import flux_cli.health as h
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,8 +45,8 @@ class TestStatusConnected:
     """test_status_connected — detailed probe returns connected with tools count."""
 
     def test_status_connected(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         tools = [{"name": f"t{i}"} for i in range(5)]
         mock_popen.return_value = _make_proc([INIT_RESPONSE, _tools_list_response(tools)])
 
@@ -57,8 +57,8 @@ class TestStatusConnected:
         assert "test-server" in result["server_info"]
 
     def test_connected_zero_tools(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_popen.return_value = _make_proc([INIT_RESPONSE, _tools_list_response([])])
 
         result = h.probe_mcp_server_detailed({"command": "npx", "args": []})
@@ -70,8 +70,8 @@ class TestStatusAuthRequired:
     """test_status_auth_required — pre-flight auth check and tools/list auth error."""
 
     def test_preflight_auth_failure(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/cmd")
-        mocker.patch("health.subprocess.run", return_value=MagicMock(returncode=1))
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/cmd")
+        mocker.patch("flux_cli.health.subprocess.run", return_value=MagicMock(returncode=1))
         config = {
             "command": "cmd", "args": [],
             "auth": {"check_cmd": ["gh", "auth", "status"], "fix_description": "run gh auth login"},
@@ -82,8 +82,8 @@ class TestStatusAuthRequired:
         assert "gh auth login" in result["detail"]
 
     def test_tools_list_auth_error(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         auth_err = {"jsonrpc": "2.0", "id": 2, "error": {"code": 401, "message": "unauthorized: bad token"}}
         mock_popen.return_value = _make_proc([INIT_RESPONSE, auth_err])
 
@@ -96,8 +96,8 @@ class TestStatusTimeout:
     """test_status_timeout — server does not respond in time."""
 
     def test_timeout(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_proc = MagicMock()
         mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="npx", timeout=10)
         mock_popen.return_value = mock_proc
@@ -113,8 +113,8 @@ class TestStatusAllProjects:
 
     def test_probes_multiple_projects(self, mocker, tmp_path):
         """Simulate two projects each with one MCP and verify probe results."""
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
 
         # Each call returns a connected response with 3 tools
         tools = [{"name": f"t{i}"} for i in range(3)]
@@ -146,8 +146,8 @@ class TestProbeBackwardCompat:
     """Ensure probe_mcp_server still returns the simple (status, detail) tuple."""
 
     def test_compat_tuple(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/npx")
-        mock_popen = mocker.patch("health.subprocess.Popen")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/npx")
+        mock_popen = mocker.patch("flux_cli.health.subprocess.Popen")
         mock_popen.return_value = _make_proc([INIT_RESPONSE, _tools_list_response()])
 
         status, detail = h.probe_mcp_server({"command": "npx", "args": []})
@@ -172,8 +172,8 @@ class TestDoctorAllPass:
         reg_path = tmp_path / "registry.json"
         reg_path.write_text(json.dumps(registry))
 
-        mocker.patch("health.shutil.which", return_value="/usr/bin/thing")
-        mocker.patch("health.sys.version_info", (3, 12, 0, "final", 0))
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/thing")
+        mocker.patch("flux_cli.health.sys.version_info", (3, 12, 0, "final", 0))
 
         results = h.run_doctor_checks(
             flux_root=tmp_path,
@@ -190,8 +190,8 @@ class TestDoctorMissingPython:
     def test_missing_python(self, mocker, tmp_path):
         for d in ("marketplace", "marketplace/mcps", "marketplace/skills", "src"):
             (tmp_path / d).mkdir(parents=True, exist_ok=True)
-        mocker.patch("health.shutil.which", return_value="/usr/bin/thing")
-        mocker.patch("health.sys.version_info", (3, 9, 1, "final", 0))
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/thing")
+        mocker.patch("flux_cli.health.sys.version_info", (3, 9, 1, "final", 0))
 
         results = h.run_doctor_checks(flux_root=tmp_path, mcp_definitions={}, secrets_index={})
         python_check = [c for c in results if "Python" in c.label][0]
@@ -213,7 +213,7 @@ class TestDoctorMissingUv:
                 return None
             return original_which(name) or "/usr/bin/thing"
 
-        mocker.patch("health.shutil.which", side_effect=fake_which)
+        mocker.patch("flux_cli.health.shutil.which", side_effect=fake_which)
 
         results = h.run_doctor_checks(flux_root=tmp_path, mcp_definitions={}, secrets_index={})
         uv_check = [c for c in results if "uv" in c.label][0]
@@ -235,7 +235,7 @@ class TestDoctorMissingNode:
                 return None
             return original_which(name) or "/usr/bin/thing"
 
-        mocker.patch("health.shutil.which", side_effect=fake_which)
+        mocker.patch("flux_cli.health.shutil.which", side_effect=fake_which)
 
         results = h.run_doctor_checks(flux_root=tmp_path, mcp_definitions={}, secrets_index={})
         node_check = [c for c in results if "node" in c.label][0]
@@ -256,7 +256,7 @@ class TestDoctorMissingClaude:
                 return None
             return original_which(name) or "/usr/bin/thing"
 
-        mocker.patch("health.shutil.which", side_effect=fake_which)
+        mocker.patch("flux_cli.health.shutil.which", side_effect=fake_which)
 
         results = h.run_doctor_checks(flux_root=tmp_path, mcp_definitions={}, secrets_index={})
         claude_check = [c for c in results if "claude" in c.label][0]
@@ -368,19 +368,19 @@ class TestCheckPythonVersion:
         assert result.passed
 
     def test_custom_min_version(self, mocker):
-        mocker.patch("health.sys.version_info", (3, 10, 0, "final", 0))
+        mocker.patch("flux_cli.health.sys.version_info", (3, 10, 0, "final", 0))
         result = h.check_python_version(min_version=(3, 11))
         assert not result.passed
 
 
 class TestCheckToolInstalled:
     def test_tool_found(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/bin/git")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/bin/git")
         result = h.check_tool_installed("git")
         assert result.passed
 
     def test_tool_missing(self, mocker):
-        mocker.patch("health.shutil.which", return_value=None)
+        mocker.patch("flux_cli.health.shutil.which", return_value=None)
         result = h.check_tool_installed("nonexistent", fix_hint="install it")
         assert not result.passed
         assert result.fix_hint == "install it"
@@ -428,12 +428,12 @@ class TestCheckBuildArtifacts:
 
 class TestCheckFluxInPath:
     def test_flux_in_path(self, mocker):
-        mocker.patch("health.shutil.which", return_value="/usr/local/bin/flux")
+        mocker.patch("flux_cli.health.shutil.which", return_value="/usr/local/bin/flux")
         result = h.check_flux_in_path()
         assert result.passed
 
     def test_flux_not_in_path(self, mocker):
-        mocker.patch("health.shutil.which", return_value=None)
+        mocker.patch("flux_cli.health.shutil.which", return_value=None)
         result = h.check_flux_in_path()
         assert not result.passed
 

@@ -1,4 +1,8 @@
-"""mcp_config.py — Generate launcher scripts and build MCP server configurations."""
+"""mcp_config.py — Generate launcher scripts and build MCP server configurations.
+
+This module provides backward-compatible helpers used by the legacy
+``bin/flux`` code. The newer sync engine is in ``flux_cli.sync``.
+"""
 
 from __future__ import annotations
 
@@ -7,20 +11,15 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-FLUX_ROOT = Path(__file__).resolve().parent.parent
+# Module-level constants (may be patched in tests)
+FLUX_ROOT = Path(__file__).resolve().parent.parent.parent
 MARKETPLACE_DIR = FLUX_ROOT / "marketplace"
 MCP_DIR = MARKETPLACE_DIR / "mcps"
 LAUNCHERS_DIR = MCP_DIR / "launchers"
 
 
 def generate_launcher(mcp_name: str, mcp_data: dict[str, Any]) -> Path | None:
-    """
-    Generate a portable launcher.sh inside the MCP's own folder.
-    For git-submodule MCPs: marketplace/mcps/<mcp>/launcher.sh
-    For npm-package MCPs:   marketplace/mcps/<mcp>/launcher.sh (dir created if needed)
-    Uses $SCRIPT_DIR so paths work on any machine.
-    Returns the launcher path, or None if no keychain secrets are needed.
-    """
+    """Generate a portable launcher.sh for an MCP with keychain secrets."""
     env_vars = mcp_data.get('auth', {}).get('env_vars', [])
     if not env_vars:
         return None
@@ -28,13 +27,10 @@ def generate_launcher(mcp_name: str, mcp_data: dict[str, Any]) -> Path | None:
     command = mcp_data.get('command', '')
     args = list(mcp_data.get('args', []))
 
-    # All launchers live in marketplace/mcps/launchers/ — outside submodules so
-    # they can be tracked by the parent flux repo.
     launcher_dir = MCP_DIR / "launchers"
     launcher_dir.mkdir(parents=True, exist_ok=True)
 
     if mcp_data.get('source_dir'):
-        # Compute relative path from launchers/ to the MCP source dir (e.g. ../wikijs-mcp)
         source_abs = FLUX_ROOT / mcp_data['source_dir']
         rel = os.path.relpath(source_abs, launcher_dir)
         args = [f'"$SCRIPT_DIR/{rel}"' if a == '{source_dir}' else shlex.quote(a) for a in args]
@@ -66,14 +62,12 @@ def build_mcp_server_config(
     env_vars = mcp_data.get('auth', {}).get('env_vars', [])
 
     if env_vars:
-        # Generate launcher that fetches secrets from Keychain at runtime
         launcher = generate_launcher(mcp_name, mcp_data)
         server = {"command": str(launcher), "args": extra_args or []}
     else:
         server = {k: v for k, v in mcp_data.items() if k in ['command', 'args', 'env']}
         if extra_args:
             server['args'] = server.get('args', []) + extra_args
-        # Resolve {source_dir} placeholder to absolute path
         if mcp_data.get('source_dir'):
             abs_source = str(FLUX_ROOT / mcp_data['source_dir'])
             server['args'] = [abs_source if a == '{source_dir}' else a for a in server.get('args', [])]

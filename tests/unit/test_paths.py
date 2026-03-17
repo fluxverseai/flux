@@ -1,8 +1,8 @@
-"""Tests for flux_cli.lib.paths — Flux home directory path resolution."""
+"""Tests for flux_cli.paths — Flux home directory path resolution."""
 
 from pathlib import Path
 
-from flux_cli.lib.paths import (
+from flux_cli.paths import (
     config_path,
     flux_home,
     launchers_dir,

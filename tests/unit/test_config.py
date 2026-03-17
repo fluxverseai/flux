@@ -1,8 +1,8 @@
-"""Tests for flux_cli.lib.config — TOML configuration management."""
+"""Tests for flux_cli.config — TOML configuration management."""
 
 from unittest.mock import patch
 
-from flux_cli.lib.config import (
+from flux_cli.config import (
     default_config,
     detect_secrets_backend,
     load_config,
@@ -14,19 +14,19 @@ class TestDetectSecretsBackend:
     """Platform-specific secrets backend detection."""
 
     def test_macos_returns_keychain(self):
-        with patch("flux_cli.lib.config.platform.system", return_value="Darwin"):
+        with patch("flux_cli.config.platform.system", return_value="Darwin"):
             assert detect_secrets_backend() == "keychain"
 
     def test_linux_returns_secret_service(self):
-        with patch("flux_cli.lib.config.platform.system", return_value="Linux"):
+        with patch("flux_cli.config.platform.system", return_value="Linux"):
             assert detect_secrets_backend() == "secret-service"
 
     def test_windows_returns_plaintext(self):
-        with patch("flux_cli.lib.config.platform.system", return_value="Windows"):
+        with patch("flux_cli.config.platform.system", return_value="Windows"):
             assert detect_secrets_backend() == "plaintext"
 
     def test_unknown_returns_plaintext(self):
-        with patch("flux_cli.lib.config.platform.system", return_value="FreeBSD"):
+        with patch("flux_cli.config.platform.system", return_value="FreeBSD"):
             assert detect_secrets_backend() == "plaintext"
 
 

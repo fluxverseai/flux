@@ -1,20 +1,7 @@
 [project]
 name = "flux-cli"
-version = "0.1.0"
-description = "A personal control plane for AI agent tooling"
-readme = "README.md"
-license = {text = "MIT"}
-authors = [{name = "Kaushal Paneri"}]
-keywords = ["mcp", "ai", "agents", "claude", "tooling"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Build Tools",
-]
+version = "0.0.1"
+description = "Flux OS — Agentic AI control plane"
 requires-python = ">=3.11"
 dependencies = [
     "rich",
@@ -22,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-flux = "flux_cli.main:main"
+flux = "flux_cli.cli.main:main"
 
 [project.optional-dependencies]
 dev = [
@@ -32,6 +19,16 @@ dev = [
     "pytest-subtests>=0.11",
     "ruff>=0.4",
 ]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+flux_cli = ["data/skills/flux/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -47,7 +44,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["lib", "flux_cli"]
+source = ["flux_cli"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
@@ -59,13 +56,13 @@ exclude_lines = [
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "S"]
 
-[tool.ruff.lint.isort]
-known-first-party = ["flux_cli", "manifest", "registry", "secrets", "health", "sandbox", "mcp_config"]
-
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S108"]  # assert and /tmp paths are expected in tests
 "tests/**/conftest.py" = ["S101", "S603"]  # subprocess in test helpers
+"src/flux_cli/cli/commands/registry.py" = ["S602", "S603", "S606", "S607"]  # subprocess calls with git/flux
+"src/flux_cli/cli/commands/doctor.py" = ["S603"]  # subprocess for setup_cmd

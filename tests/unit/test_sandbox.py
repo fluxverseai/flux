@@ -1,11 +1,10 @@
-"""Unit tests for lib/sandbox.py"""
-
+"""Unit tests for flux_cli.sandbox — sandbox lifecycle."""
 import json
 import re
 
 import pytest
 
-import sandbox as sb
+import flux_cli.sandbox as sb
 
 # ---------------------------------------------------------------------------
 # generate_run_id
@@ -27,29 +26,38 @@ class TestGenerateRunId:
 # ---------------------------------------------------------------------------
 
 class TestCreateSandbox:
-    def test_creates_sandbox_and_workspace_dirs(self, patch_sandbox_paths, flux_root, patch_mcp_config_paths, mocker):
-        mocker.patch("mcp_config.build_mcp_server_config", return_value={"command": "npx", "args": []})
-        path = sb.create_sandbox("20260315-abcd", ["memory"], {"mcp_definitions": {"memory": {}}})
+    def test_creates_sandbox_and_workspace_dirs(self, patch_sandbox_paths, flux_root):
+        registry = {
+            "version": "1.0.0",
+            "mcp_definitions": {"memory": {"type": "npm-package", "command": "npx", "args": ["-y", "pkg"]}},
+            "skill_definitions": {},
+        }
+        path = sb.create_sandbox("20260315-abcd", ["memory"], registry=registry, skip_preflight=True)
         assert path.is_dir()
         assert (path / "workspace").is_dir()
 
-    def test_writes_mcp_json(self, patch_sandbox_paths, flux_root, mocker):
-        mocker.patch("mcp_config.build_mcp_server_config", return_value={"command": "npx", "args": []})
-        path = sb.create_sandbox("20260315-abcd", ["memory"], {"mcp_definitions": {"memory": {}}})
+    def test_writes_mcp_json(self, patch_sandbox_paths, flux_root):
+        registry = {
+            "version": "1.0.0",
+            "mcp_definitions": {"memory": {"type": "npm-package", "command": "npx", "args": ["-y", "pkg"]}},
+            "skill_definitions": {},
+        }
+        path = sb.create_sandbox("20260315-abcd", ["memory"], registry=registry, skip_preflight=True)
         mcp_json = json.loads((path / ".mcp.json").read_text())
         assert "mcpServers" in mcp_json
         assert "memory" in mcp_json["mcpServers"]
 
     def test_empty_mcps_writes_empty_servers(self, patch_sandbox_paths, flux_root):
-        path = sb.create_sandbox("20260315-abcd", [], {"mcp_definitions": {}})
+        registry = {"version": "1.0.0", "mcp_definitions": {}, "skill_definitions": {}}
+        path = sb.create_sandbox("20260315-abcd", [], registry=registry, skip_preflight=True)
         mcp_json = json.loads((path / ".mcp.json").read_text())
         assert mcp_json["mcpServers"] == {}
 
-    def test_unknown_mcp_exits_and_cleans_up(self, patch_sandbox_paths, flux_root):
-        with pytest.raises(SystemExit):
-            sb.create_sandbox("20260315-abcd", ["nonexistent"], {"mcp_definitions": {}})
-        # sandbox dir should be cleaned up
-        assert not (flux_root / "sandbox" / "20260315-abcd").exists()
+    def test_unknown_mcp_skipped_silently(self, patch_sandbox_paths, flux_root):
+        registry = {"version": "1.0.0", "mcp_definitions": {}, "skill_definitions": {}}
+        path = sb.create_sandbox("20260315-abcd", ["nonexistent"], registry=registry, skip_preflight=True)
+        mcp_json = json.loads((path / ".mcp.json").read_text())
+        assert mcp_json["mcpServers"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -99,22 +107,6 @@ class TestRunMeta:
 
 
 # ---------------------------------------------------------------------------
-# cleanup_sandbox
-# ---------------------------------------------------------------------------
-
-class TestCleanupSandbox:
-    def test_removes_directory(self, flux_root):
-        d = flux_root / "sandbox" / "toclean"
-        d.mkdir(parents=True)
-        sb.cleanup_sandbox(d)
-        assert not d.exists()
-
-    def test_noop_if_already_missing(self, flux_root):
-        d = flux_root / "sandbox" / "missing"
-        sb.cleanup_sandbox(d)  # should not raise
-
-
-# ---------------------------------------------------------------------------
 # list_runs
 # ---------------------------------------------------------------------------
 
@@ -160,28 +152,32 @@ class TestCleanRuns:
         assert count == 3
         assert list((flux_root / "sandbox").iterdir()) == []
 
-    def test_preserves_claude_dir(self, patch_sandbox_paths, flux_root):
-        (flux_root / "sandbox" / ".claude").mkdir(parents=True)
+    def test_force_removes_all_dirs(self, patch_sandbox_paths, flux_root):
         (flux_root / "sandbox" / "sandbox1").mkdir()
+        (flux_root / "sandbox" / "sandbox2").mkdir()
         count = sb.clean_runs(force=True)
-        assert count == 1
-        assert (flux_root / "sandbox" / ".claude").exists()
+        assert count == 2
 
     def test_empty_sandbox_returns_zero(self, patch_sandbox_paths, flux_root):
         assert sb.clean_runs(force=True) == 0
 
-    def test_interactive_confirm_yes(self, patch_sandbox_paths, flux_root, mocker):
-        (flux_root / "sandbox" / "sandbox1").mkdir()
-        mocker.patch("builtins.input", return_value="y")
-        count = sb.clean_runs(force=False)
-        assert count == 1
+    def test_keep_recent_preserves_latest(self, patch_sandbox_paths, flux_root):
+        """Non-force mode keeps the most recent 5 completed runs."""
+        for i in range(7):
+            d = flux_root / "sandbox" / f"run{i:03d}"
+            d.mkdir(parents=True)
+            meta = {"status": "done"}
+            (d / "run-meta.json").write_text(json.dumps(meta))
+        count = sb.clean_runs(force=False, keep=5)
+        assert count == 2  # 7 - 5 kept = 2 removed
 
-    def test_interactive_abort_on_no(self, patch_sandbox_paths, flux_root, mocker):
-        (flux_root / "sandbox" / "sandbox1").mkdir()
-        mocker.patch("builtins.input", return_value="n")
-        count = sb.clean_runs(force=False)
-        assert count == -1
-        assert (flux_root / "sandbox" / "sandbox1").exists()
+    def test_no_force_keeps_running(self, patch_sandbox_paths, flux_root):
+        d = flux_root / "sandbox" / "sandbox1"
+        d.mkdir(parents=True)
+        (d / "run-meta.json").write_text(json.dumps({"status": "running"}))
+        count = sb.clean_runs(force=False, keep=0)
+        assert count == 0
+        assert d.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +192,6 @@ class TestLoadRunManifest:
         result = sb.load_run_manifest(str(f))
         assert result["name"] == "test"
 
-    def test_missing_file_exits(self, tmp_path):
-        with pytest.raises(SystemExit):
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises((SystemExit, FileNotFoundError)):
             sb.load_run_manifest(str(tmp_path / "nonexistent.json"))

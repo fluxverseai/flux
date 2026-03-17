@@ -1,4 +1,4 @@
-"""Unit tests for flux_cli.lib.preflight — pre-flight validation."""
+"""Unit tests for flux_cli.preflight — pre-flight validation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from flux_cli.lib.preflight import run_preflight
+from flux_cli.preflight import run_preflight
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -76,7 +76,7 @@ def base_registry(tmp_path):
 def _patch_secrets_index(monkeypatch, tmp_path):
     """Patch secrets index to use a temporary file."""
     secrets_file = tmp_path / "secrets.json"
-    monkeypatch.setattr("flux_cli.lib.paths._resolve_flux_home", lambda: tmp_path)
+    monkeypatch.setattr("flux_cli.paths._resolve_flux_home", lambda: tmp_path)
     return secrets_file
 
 
@@ -106,7 +106,7 @@ class TestPreflightMissingAuth:
 class TestPreflightAuthCheckFails:
     def test_preflight_auth_check_fails(self, base_registry, mocker):
         """MCP with check_cmd that fails triggers an error."""
-        mock_run = mocker.patch("flux_cli.lib.preflight.subprocess.run")
+        mock_run = mocker.patch("flux_cli.preflight.subprocess.run")
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_run.return_value = mock_result
@@ -119,7 +119,7 @@ class TestPreflightAuthCheckFails:
     def test_preflight_auth_check_cmd_not_found(self, base_registry, mocker):
         """MCP with check_cmd where binary is missing triggers an error."""
         mocker.patch(
-            "flux_cli.lib.preflight.subprocess.run",
+            "flux_cli.preflight.subprocess.run",
             side_effect=FileNotFoundError,
         )
         result = run_preflight(["github-mcp"], [], registry=base_registry)

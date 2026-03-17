@@ -51,10 +51,7 @@ _VALID_SKILL_TYPES = {"github", "local"}
 
 
 def validate_registry(data: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Validate registry.json structure.
-
-    Returns (True, []) on success, or (False, [errors]) on failure.
-    """
+    """Validate registry.json structure."""
     errors: list[str] = []
 
     if not isinstance(data, dict):
@@ -89,10 +86,7 @@ def validate_registry(data: dict[str, Any]) -> tuple[bool, list[str]]:
 # ---------------------------------------------------------------------------
 
 def validate_flux_json(data: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Validate a project's flux.json structure.
-
-    Returns (True, []) on success, or (False, [errors]) on failure.
-    """
+    """Validate a project's flux.json structure."""
     errors: list[str] = []
 
     if not isinstance(data, dict):

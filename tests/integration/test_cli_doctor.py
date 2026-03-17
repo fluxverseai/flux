@@ -1,5 +1,4 @@
 """Integration tests: flux doctor"""
-
 import pytest
 
 from .conftest import run_flux
@@ -7,26 +6,24 @@ from .conftest import run_flux
 
 @pytest.mark.integration
 class TestFluxDoctor:
-    def test_runs_and_reports_checks(self, flux_env):
+    def test_environment_checks_header(self, flux_env):
         env, _ = flux_env
         result = run_flux("doctor", env=env)
-        # Should mention environment/dependency checks
-        assert "Python" in result.stdout or "python" in result.stdout.lower()
+        assert "Environment" in result.stdout
 
-    def test_reports_missing_marketplace_json(self, flux_env):
+    def test_reports_missing_src_dir(self, flux_env):
         env, root = flux_env
-        mp = root / "marketplace" / "marketplace.json"
-        if mp.exists():
-            mp.unlink()
+        import shutil
+        shutil.rmtree(root / "src")
         result = run_flux("doctor", env=env)
-        assert "marketplace" in result.stdout.lower() or "registry" in result.stdout.lower()
+        assert result.returncode == 0
 
     def test_runtime_dependencies_checked(self, flux_env):
         env, _ = flux_env
         result = run_flux("doctor", env=env)
-        output = result.stdout.lower()
-        assert "uv" in output
-        assert "git" in output
+        assert "node" in result.stdout
+        assert "uv" in result.stdout
+        assert "git" in result.stdout
 
     def test_exits_zero_in_healthy_env(self, flux_env):
         env, _ = flux_env
